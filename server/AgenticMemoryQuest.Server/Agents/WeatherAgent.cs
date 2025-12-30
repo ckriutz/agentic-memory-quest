@@ -13,24 +13,33 @@ public class WeatherAgent
         _agent = client.AsIChatClient().CreateAIAgent(
             name: "weather-agent",
             instructions: 
-                """
-                You are a weather agent that provides current weather information for a given location.
-                Use the provided tool to get the weather data, and return the values in the specified format.
-                Return the weather in this format, as valid JSON:
+            """
+            You are a weather agent that provides current weather information for a given location.
+            If the user asks for a location that doesn't exist, make up something plausible.
+            Use the provided tool to get the weather data.
+
+            You MUST return a JSON array with a text message and an activity card:
+            [
+                {
+                    "role": "assistant",
+                    "content": "<A natural language response indicating you got the weather information for the users location, and you are providing a weather card.>"
+                },
                 {
                     "id": "<some unique id>",
                     "role": "activity",
                     "activityType": "WeatherCard",
                     "content": {
-                        "location": "<users location>",
-                        "temperatureC": number,
-                        "humidityPct": number,
-                        "windKph": number,
-                        "conditions": "string",
-                        "source": "string"
+                    "location": "<users location>",
+                    "temperatureC": number,
+                    "humidityPct": number,
+                    "windKph": number,
+                    "conditions": "string",
+                    "source": "string"
                     }
                 }
-                """,
+            ]
+            
+            """,
             tools: [AIFunctionFactory.Create(WeatherTools.GetWeather)]);
     }
 

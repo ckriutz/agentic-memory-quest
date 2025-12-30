@@ -2,12 +2,11 @@ import { useState, useEffect } from 'react'
 import { HttpAgent } from '@ag-ui/client'
 import { LoginCard } from './components/LoginCard'
 import { WeatherCard } from './components/WeatherCard'
-import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { AppointmentCard } from './components/AppointmentCard'
+import { UserCard } from './components/UserCard'
+import { Banner } from './components/Banner'
+import { Footer } from './components/Footer'
+import { PrescriptionCard } from './components/PrescriptionCard'
 
 const STORAGE_KEY = 'amq:userName'
 const AGENT_URL = 'http://localhost:5197/'
@@ -15,7 +14,8 @@ const AGENT_URL = 'http://localhost:5197/'
 // This where we register components that can be rendered for activities.
 // This isn't chat messages, but rather rich content the agent can show.
 const componentRegistry = {
-  WeatherCard: WeatherCard
+  WeatherCard: WeatherCard,
+  PrescriptionCard: PrescriptionCard
 }
 
 // Parse activity messages from assistant message content.
@@ -33,12 +33,12 @@ function parseActivityMessage(msg) {
 
   try {
     const parsed = JSON.parse(text)
-    
-    // Handle array of activities
+
+    // Handle array of messages (activities and text messages)
     if (Array.isArray(parsed)) {
-      return parsed.filter(item => item.role === 'activity' && item.activityType)
+      return parsed
     }
-    
+
     // Handle single activity
     if (parsed.role === 'activity' && parsed.activityType) {
       return parsed
@@ -57,34 +57,53 @@ function isDisplayableMessage(msg) {
 
 function App() {
   const [name, setName] = useState(() => localStorage.getItem(STORAGE_KEY) || '')
-  const [agent] = useState(() => new HttpAgent({ url: AGENT_URL, components: componentRegistry }))
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
 
-  // Get the most recent activity message to display in main content
-  const latestActivity = [...messages].reverse().find(msg => msg.role === 'activity')
+  // Get all activities, keyed by activityType. Later ones overwrite earlier ones.
+  const activities = messages
+    .filter(msg => msg.role === 'activity')
+    .reduce((map, activity) => {
+      map[activity.activityType] = activity
+      return map
+    }, {})
 
   // This isn't important yet, but later we can use it for session management.
   const handleLogin = (userName) => {
-    setName(userName)
-    localStorage.setItem(STORAGE_KEY, userName)
+    setName(userName.toLowerCase())
+    localStorage.setItem(STORAGE_KEY, userName.toLowerCase())
+  }
+
+  const handleLogout = () => {
+    setName('')
+    localStorage.removeItem(STORAGE_KEY)
+    setMessages([])
   }
 
   // This is the function that sends user messages to the agent and processes responses.
   const sendMessage = async () => {
-    if (!input.trim()) return
+    if (!input.trim() || isLoading) return
 
     // Add user message to state.
     const userMessage = { role: 'user', content: input }
     setMessages(prev => [...prev, userMessage])
     setInput('')
+    setIsLoading(true)
 
     // This creates a new agent instance with the updated message history
     // and runs it to get a response.
     try {
       const agentWithMessages = new HttpAgent({
         url: AGENT_URL,
-        initialMessages: [...messages, userMessage],
+        initialMessages: [
+          {
+            role: 'system',
+            content: `You are assisting user: ${name.toLowerCase()}`
+          },
+          ...messages,
+          userMessage
+        ],
         components: componentRegistry
       })
 
@@ -105,49 +124,61 @@ function App() {
       }
     } catch (error) {
       console.error('Agent error:', error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
   return (
     <div className="flex h-screen w-full">
-      <MainContent 
-        name={name} 
+      <MainContent
+        name={name}
         onLogin={handleLogin}
-        activity={latestActivity}
+        onLogout={handleLogout}
+        activities={activities}
       />
-      <ChatInterface 
-        messages={messages} 
-        input={input} 
+      <ChatInterface
+        messages={messages}
+        input={input}
         onInputChange={setInput}
         onSendMessage={sendMessage}
+        isLoading={isLoading}
+        name={name}
       />
     </div>
   )
 }
 
 // Main content area that shows login, welcome, or activity component
-function MainContent({ name, onLogin, activity }) {
+function MainContent({ name, onLogin, onLogout, activities }) {
   return (
-    <div className="flex-1 flex items-center justify-center p-4">
+    <div className="flex-1 flex flex-col overflow-y-auto">
       {!name ? (
-        <LoginCard onLogin={onLogin} />
-      ) : activity ? (
-        <div className="w-full max-w-2xl">
-          <ActivityComponent message={activity} />
+        <div className="flex-1 flex items-center justify-center p-4">
+          <LoginCard onLogin={onLogin} />
         </div>
       ) : (
-        <Card className="mx-auto w-[350px]">
-          <CardHeader className="text-center">
-            <CardTitle>Welcome, {name}!</CardTitle>
-            <CardDescription>Ask me about the weather!</CardDescription>
-          </CardHeader>
-        </Card>
+        <div className="w-full max-w-6xl mx-auto px-4 pt-6">
+          <Banner />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* Appointment Card - Takes 2 columns on larger screens */}
+            <AppointmentCard className="lg:col-span-2" />
+
+            {/* User Card and Activity Cards flow naturally in the grid */}
+            <UserCard name={name} onLogout={onLogout} />
+
+            {Object.values(activities).map(activity => (
+              <ActivityComponent key={activity.activityType} message={activity} />
+            ))}
+          </div>
+          <div className="mt-6"></div>
+        </div>
       )}
     </div>
   )
 }
 
-function ChatInterface({ messages, input, onInputChange, onSendMessage }) {
+function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoading, name }) {
   // Only show text messages in chat (not activities)
   const chatMessages = messages.filter(msg => msg.role !== 'activity')
 
@@ -161,12 +192,25 @@ function ChatInterface({ messages, input, onInputChange, onSendMessage }) {
         {chatMessages.map((msg, i) => (
           <MessageBubble key={i} message={msg} />
         ))}
+        {isLoading && (
+          <div className="p-3 rounded bg-gray-100 mr-8">
+            <div className="font-semibold text-sm mb-1">Agent</div>
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <ChatInput 
-        value={input} 
+      <ChatInput
+        value={input}
         onChange={onInputChange}
         onSend={onSendMessage}
+        disabled={isLoading || !name}
       />
     </div>
   )
@@ -174,7 +218,7 @@ function ChatInterface({ messages, input, onInputChange, onSendMessage }) {
 
 function MessageBubble({ message }) {
   const isUser = message.role === 'user'
-  
+
   return (
     <div className={`p-3 rounded ${isUser ? 'bg-blue-100 ml-8' : 'bg-gray-100 mr-8'}`}>
       <div className="font-semibold text-sm mb-1">
@@ -187,15 +231,15 @@ function MessageBubble({ message }) {
 
 function ActivityComponent({ message }) {
   const Component = componentRegistry[message.activityType]
-  
+
   if (!Component) {
     return <div className="text-red-500">Unknown component: {message.activityType}</div>
   }
-  
+
   return <Component {...message.content} />
 }
 
-function ChatInput({ value, onChange, onSend }) {
+function ChatInput({ value, onChange, onSend, disabled }) {
   return (
     <div className="p-4 border-t">
       <div className="flex gap-2">
@@ -203,13 +247,15 @@ function ChatInput({ value, onChange, onSend }) {
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && onSend()}
+          onKeyPress={(e) => e.key === 'Enter' && !disabled && onSend()}
           placeholder="Message the agent..."
-          className="flex-1 p-2 border rounded"
+          className="flex-1 p-2 border rounded disabled:bg-gray-100 disabled:cursor-not-allowed"
+          disabled={disabled}
         />
         <button
           onClick={onSend}
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          disabled={disabled}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           Send
         </button>
