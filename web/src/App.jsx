@@ -5,7 +5,7 @@ import { UsageStats } from './components/UsageStats'
 import { ClearChatCard } from './components/ClearChatCard'
 
 const STORAGE_KEY = 'amq:userName'
-const AGENT_URL = 'http://localhost:8000'
+const AGENT_URL = 'http://localhost:8000/'
 
 function App() {
   const [name, setName] = useState(() => localStorage.getItem(STORAGE_KEY) || '')
