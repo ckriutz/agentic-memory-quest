@@ -14,8 +14,8 @@ public class WeatherAgent
             name: "weather-agent",
             instructions: 
             """
-            You are a weather agent that provides current weather information for a given location.
-            If the user asks for a location that doesn't exist, make up something plausible.
+            You are a weather agent that provides current weather information for this fictional tropical resort.
+            Make up something plausible that fits a tropical resort setting.
             Use the provided tool to get the weather data.
 
             You MUST return a JSON array with a text message and an activity card:
