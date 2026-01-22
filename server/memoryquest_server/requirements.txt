@@ -1,2 +1,3 @@
 agent-framework --pre
 "fastapi[standard]"
+agent-framework-mem0 --pre
