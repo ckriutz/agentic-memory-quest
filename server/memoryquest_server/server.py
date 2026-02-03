@@ -294,6 +294,23 @@ async def cognee_get_memories(request: ChatRequest):
 
     return {"message": memories}
 
+@app.delete("/cognee/delete/{username}")
+async def delete_cognee_memory(username: str):
+    print(f"Received request to delete Cognee memory for user: {username}")
+
+    context_provider = cognee_agent.context_provider
+    if not context_provider or not hasattr(context_provider, "delete_user_memories"):
+        raise HTTPException(status_code=500, detail="Cognee context provider does not support deletion")
+
+    try:
+        result = await context_provider.delete_user_memories(username)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete Cognee memories: {exc}")
+
+    if not result.get("deleted"):
+        return {"message": f"No Cognee dataset found for user: {username}", **result}
+    return {"message": f"Deleted all Cognee memories for user: {username}", **result}
+
 
 @app.post("/hindsight")
 async def hindsight(request: ChatRequest):

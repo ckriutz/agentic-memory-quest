@@ -5,6 +5,7 @@ from typing import Any, MutableSequence, Sequence
 from cognee_community_vector_adapter_qdrant import register
 from cognee_community_vector_adapter_qdrant.qdrant_adapter import QDrantAdapter
 from qdrant_client import AsyncQdrantClient
+from cognee.modules.data.exceptions.exceptions import DatasetNotFoundError
 from agent_framework import ChatMessage, Context, ContextProvider
 from dotenv import load_dotenv
 
@@ -42,8 +43,44 @@ class CustomQDrantAdapter(QDrantAdapter):
 class CogneeMemoryTool(ContextProvider):
     def __init__(self) -> None:
         print("Initializing Cognee Memory Tool")
+        self.dataset_name = os.getenv("COGNEE_DATASET_NAME") or "main_dataset"
         self._configure_cognee()
         self._register_vector_adapter()
+
+    def _dataset_name_for_user(self, username: str) -> str:
+        safe_username = (username or "anonymous").strip() or "anonymous"
+        return f"{self.dataset_name}__{safe_username}"
+
+    def _extract_search_result_texts(self, results: Any) -> list[str]:
+        texts: list[str] = []
+        if results is None:
+            return texts
+
+        for result in results:
+            search_result = None
+            if isinstance(result, dict):
+                search_result = result.get("search_result")
+            else:
+                search_result = getattr(result, "search_result", None)
+
+            if search_result is None:
+                continue
+
+            if isinstance(search_result, list):
+                texts.extend([str(x) for x in search_result])
+            else:
+                texts.append(str(search_result))
+
+        return texts
+
+    async def _dataset_exists(self, dataset_name: str) -> bool:
+        try:
+            datasets_api = cognee.datasets()
+            datasets = await datasets_api.list_datasets()
+            return any(getattr(ds, "name", None) == dataset_name for ds in datasets)
+        except Exception:
+            # If we can't reliably check, allow the search attempt.
+            return True
 
     def _configure_cognee(self) -> None:
         """Configure cognee using environment variables from .env file."""
@@ -58,7 +95,7 @@ class CogneeMemoryTool(ContextProvider):
         embedding_api_key = os.getenv("EMBEDDING_API_KEY")
         embedding_api_version = os.getenv("EMBEDDING_API_VERSION")
         embedding_model = os.getenv("EMBEDDING_MODEL")
-        embedding_dimensions = os.getenv("EMBEDDING_DIMENSIONS", "3072")
+        embedding_dimensions = os.getenv("EMBEDDING_DIMENSIONS", "1536")
         
         # Vector DB Configuration - use VECTOR_DB_* variables directly from .env
         vector_db_url = os.getenv("VECTOR_DB_URL")
@@ -76,7 +113,10 @@ class CogneeMemoryTool(ContextProvider):
         os.environ["COGNEE_VECTOR_DB_PROVIDER"] = vector_db_provider
         os.environ["COGNEE_VECTOR_DB_URL"] = vector_db_url
         
-        print(f"Cognee configured: LLM={llm_model}, Embedding={embedding_model}, VectorDB={vector_db_provider} at {vector_db_url}")
+        print(
+            f"Cognee configured: LLM={llm_model}, Embedding={embedding_model}, "
+            f"VectorDB={vector_db_provider} at {vector_db_url}, dataset={self.dataset_name}"
+        )
 
     def _register_vector_adapter(self) -> None:
         """Register our custom QDrant adapter that handles HTTPS properly."""
@@ -112,22 +152,43 @@ class CogneeMemoryTool(ContextProvider):
 
         content = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
         print(f"Adding content to cognee: {content[:100]}...")
-        
-        result = await cognee.add(content)
+
+        dataset_name = self._dataset_name_for_user(username)
+
+        result = await cognee.add(content, dataset_name=dataset_name)
         print(f"Cognee add result: {result}")
-    
+
         # Process with LLMs to build the knowledge graph
-        await cognee.cognify()
+        await cognee.cognify(datasets=dataset_name)
         print("Cognee cognify completed")
 
     async def invoking(self, messages: ChatMessage | MutableSequence[ChatMessage],**kwargs: Any,) -> Context:
         """Called before the agent processes messages - can inject context from cognee."""
         print("CogneeMemoryTool invoking")
-        results = await cognee.search(query_text=f"Can you tell me a little about the user {kwargs.get('username', 'anonymous')} and their spa preferences?")
-        memories = []
-        for result in results:
-            if isinstance(result, dict) and 'search_result' in result:
-                memories.extend(result['search_result'])
+        username = kwargs.get("username", "anonymous")
+        dataset_name = self._dataset_name_for_user(username)
+
+        results: Any = None
+
+        try:
+            if not await self._dataset_exists(dataset_name):
+                memories = []
+                return Context(
+                    messages=[
+                        ChatMessage(
+                            role="system",
+                            text=f"Cognee memory recall results:\n{memories}",
+                        )
+                    ]
+                )
+
+            results = await cognee.search(
+                query_text=f"Can you tell me a little about the user {username} and their spa preferences?",
+                datasets=dataset_name,
+            )
+            memories = self._extract_search_result_texts(results)
+        except DatasetNotFoundError:
+            memories = []
         
         print(f"Cognee search results: {results}")
         return Context(
@@ -139,17 +200,53 @@ class CogneeMemoryTool(ContextProvider):
             ]
         )
     
-    async def get_memories(self, username: str, query: str | None = None, limit: int = 10) -> list[dict[str, str]]:
+    async def get_memories(self, username: str, query: str | None = None, limit: int = 10) -> list[str]:
         """Retrieve memories for a given username from cognee."""
         print(f"Retrieving memories for user: {username}")
         
         # Use the query parameter if provided, otherwise ask about spa preferences
         search_query = query or f"Can you tell me a little about the user {username} and their spa preferences?"
-        
-        results = await cognee.search(query_text=search_query)
-        memories = []
-        for result in results:
-            if isinstance(result, dict) and 'search_result' in result:
-                memories.extend(result['search_result'])
-        
+
+        dataset_name = self._dataset_name_for_user(username)
+        try:
+            if not await self._dataset_exists(dataset_name):
+                memories = []
+                if limit and limit > 0:
+                    return memories[:limit]
+                return memories
+
+            results = await cognee.search(query_text=search_query, datasets=dataset_name)
+            memories = self._extract_search_result_texts(results)
+        except DatasetNotFoundError:
+            memories = []
+
+        if limit and limit > 0:
+            return memories[:limit]
         return memories
+
+    async def delete_user_memories(self, username: str) -> dict[str, Any]:
+        """Delete all stored Cognee memories for the given user.
+
+        Implementation detail: we store each user's data in a separate dataset named
+        `{base_dataset}__{username}`, so deleting the dataset deletes all of that user's data.
+        """
+        dataset_name = self._dataset_name_for_user(username)
+        datasets_api = cognee.datasets()
+
+        datasets = await datasets_api.list_datasets()
+        dataset = next((ds for ds in datasets if getattr(ds, "name", None) == dataset_name), None)
+        if dataset is None:
+            return {
+                "deleted": False,
+                "dataset_name": dataset_name,
+                "reason": "dataset_not_found",
+            }
+
+        dataset_id = getattr(dataset, "id", None)
+        await datasets_api.delete_dataset(str(dataset_id))
+
+        return {
+            "deleted": True,
+            "dataset_name": dataset_name,
+            "dataset_id": str(dataset_id),
+        }
