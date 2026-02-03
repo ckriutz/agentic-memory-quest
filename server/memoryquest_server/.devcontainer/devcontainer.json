@@ -3,7 +3,11 @@
 {
 	"name": "Python 3",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/python:2-3.12-trixie",
+	"image": "mcr.microsoft.com/devcontainers/python:2-3.12-bookworm",
+	//"features": {
+	//	"ghcr.io/devcontainers/features/azure-cli:1": {},
+	//	"ghcr.io/azure/azure-dev/azd:0": {}
+	//},
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
@@ -12,7 +16,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip3 install --user -r requirements.txt",
+	"postCreateCommand": "pip3 install --user -r requirements.txt && curl -L https://aka.ms/InstallAzureCli | bash",
 
 	// Configure tool-specific properties.
 	// "customizations": {},

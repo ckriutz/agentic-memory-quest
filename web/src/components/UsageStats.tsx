@@ -9,7 +9,7 @@ export function UsageStats({ usage }: { usage?: UsageStats }) {
 
   return (
     <div className="bg-white rounded-lg shadow-md p-4">
-      <h3 className="font-semibold text-gray-700 mb-3 text-sm">Token Usage</h3>
+      <h3 className="font-semibold text-gray-700 mb-3 text-sm">Non-Memory Token Usage</h3>
       <div className="space-y-2">
         <div className="flex justify-between items-center">
           <span className="text-sm text-gray-600">Input:</span>

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { UserCard } from './components/UserCard'
 import { Banner } from './components/Banner'
 import { UsageStats } from './components/UsageStats'
 import { ClearChatCard } from './components/ClearChatCard'
+import { MemoriesCard } from './components/MemoriesCard'
 
 const STORAGE_KEY = 'amq:userName'
 const AGENT_URL = 'http://localhost:8000/'
@@ -14,6 +15,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [memoryFramework, setMemoryFramework] = useState('none')
   const [usage, setUsage] = useState(null)
+  const [memories, setMemories] = useState(null)
+  const [isDeletingMemories, setIsDeletingMemories] = useState(false)
 
   // This isn't important yet, but later we can use it for session management.
   const handleLogin = (userName) => {
@@ -31,6 +34,62 @@ function App() {
   const handleClearChat = () => {
     setMessages([])
     setUsage(null)
+    setMemories(null)
+  }
+
+  const getEndpoint = () => (memoryFramework === 'none' ? AGENT_URL : `${AGENT_URL}${memoryFramework}`)
+
+  const fetchMemories = async (updatedMessages) => {
+    try {
+      const endpoint = getEndpoint()
+      const memoriesEndpoint = `${endpoint}/memories`
+      const memoriesResponse = await fetch(memoriesEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: name.toLowerCase(),
+          messages: updatedMessages.filter(m => m.role !== 'activity')
+        })
+      })
+
+      if (memoriesResponse.ok) {
+        const memoriesData = await memoriesResponse.json()
+        console.log('Memories data:', memoriesData)
+        setMemories(memoriesData)
+      }
+    } catch (memoryError) {
+      console.error('Error fetching memories:', memoryError)
+    }
+  }
+
+  const handleDeleteMemories = async () => {
+    if (!name || isDeletingMemories) return
+    setIsDeletingMemories(true)
+
+    try {
+      const endpoint = getEndpoint()
+      const deleteEndpoint = `${endpoint}/delete/${name.toLowerCase()}`
+
+      const response = await fetch(deleteEndpoint, { method: 'DELETE' })
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      let deleteData = null
+      try {
+        deleteData = await response.json()
+      } catch {
+        deleteData = { message: 'Memories deleted.' }
+      }
+
+      setMemories(deleteData)
+      console.log('Memories deleted', deleteData)
+    } catch (error) {
+      console.error('Error deleting memories:', error)
+    } finally {
+      setIsDeletingMemories(false)
+    }
   }
 
   // This is the function that sends user messages to the agent and processes responses.
@@ -82,6 +141,9 @@ function App() {
         setUsage(data.usage)
       }
 
+      // Fetch memories after successful response (separate from chat)
+      await fetchMemories(updatedMessages)
+
     } catch (error) {
       console.error('Agent error:', error)
     } finally {
@@ -97,6 +159,10 @@ function App() {
         onLogout={handleLogout}
         usage={usage}
         onClearChat={handleClearChat}
+        memories={memories}
+        memoryFramework={memoryFramework}
+        onDeleteMemories={handleDeleteMemories}
+        deleteMemoriesDisabled={!name || isDeletingMemories}
       />
       <ChatInterface
         messages={messages}
@@ -113,7 +179,7 @@ function App() {
 }
 
 // Main content area that shows login, welcome, or activity component
-function MainContent({ name, onLogin, onLogout, usage, onClearChat }) {
+function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled }) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto" style={{ backgroundImage: 'url(/images/resort_image.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
       {!name ? (
@@ -129,6 +195,12 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat }) {
             <UserCard name={name} onLogin={onLogin} onLogout={onLogout} />
             <UsageStats usage={usage} />
             <ClearChatCard onClearChat={onClearChat} />
+            <MemoriesCard
+              memories={memories}
+              memoryFramework={memoryFramework}
+              onDeleteMemories={onDeleteMemories}
+              deleteMemoriesDisabled={deleteMemoriesDisabled}
+            />
           </div>
           <div className="mt-6"></div>
         </div>
@@ -140,6 +212,11 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat }) {
 function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoading, name, memoryFramework, onMemoryFrameworkChange }) {
   // Only show text messages in chat (not activities)
   const chatMessages = messages.filter(msg => msg.role !== 'activity')
+  const messagesEndRef = useRef(null)
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, isLoading])
 
   return (
     <div className="w-[400px] border-l flex flex-col">
@@ -174,6 +251,7 @@ function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoadin
             </div>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
       <ChatInput

@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from typing import Optional, Any
 from agent_framework.azure import AzureOpenAIChatClient
@@ -7,6 +8,7 @@ from agent_framework import ContextProvider, Context, ChatClientProtocol, ChatMe
 import json
 import re
 
+load_dotenv()
 
 class ClientDetailsModels(BaseModel):
     """Information about the client's spa preferences and preferred hours."""

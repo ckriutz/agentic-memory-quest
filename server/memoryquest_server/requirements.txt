@@ -1,3 +1,9 @@
 agent-framework --pre
-"fastapi[standard]"
+fastapi[standard]
 agent-framework-mem0 --pre
+mem0ai
+python-dotenv
+cognee
+cognee-community-vector-adapter-qdrant
+azure-cli
+hindsight-client

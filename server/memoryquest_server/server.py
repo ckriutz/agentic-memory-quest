@@ -2,10 +2,30 @@ from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatMessage
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from agents.agent_framework_memory_agent import AgentFrameworkMemoryAgent
+import httpx
+from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Any
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# QdrantClient defaults to port 6333 which causes timeouts with HTTPS endpoints if not explicitly handled.
+if os.getenv("QDRANT_HOST", "").startswith("https://") and os.getenv("QDRANT_PORT") == "6333":
+    print("Adjusting QDRANT_PORT to 443 for HTTPS connection in server startup")
+    os.environ["QDRANT_PORT"] = "443"
+
+from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework import ChatMessage
+
+from agents.agent_framework_memory_agent import AgentFrameworkMemoryAgent
+from agents.cognee_agent import CogneeAgent
+from agents.hindsight_agent import HindsightAgent
+from agents.mem0_agent import Mem0Agent
+from tools.mem0_tool import Mem0Tool
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
@@ -16,9 +36,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} environment variable is not set.")
+    return value
+
+
+async def check_qdrant_health():
+    """Check if Qdrant is running and accessible"""
+    qdrant_host = os.getenv("QDRANT_HOST")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{qdrant_host}")
+            if response.status_code == 200:
+                print(f"✓ Qdrant is running and accessible at {qdrant_host}")
+                return True
+            else:
+                print(f"✗ Qdrant returned status code {response.status_code}")
+                return False
+    except Exception as e:
+        print(f"✗ Qdrant is not accessible at {qdrant_host}")
+        return False
+
+async def check_hindsight_health():
+    """Check if Hindsight is running and accessible"""
+    hindsight_url = os.getenv("HINDSIGHT_URL", "http://localhost:8888")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{hindsight_url}/health")
+            if response.status_code == 200:
+                print(f"✓ Hindsight is running and accessible at {hindsight_url}")
+                return True
+            else:
+                print(f"✗ Hindsight returned status code {response.status_code}")
+                return False
+    except Exception as e:
+        print(f"✗ Hindsight is not accessible at {hindsight_url}: {str(e)}")
+        return False
+
 @app.get("/")
-def read_root():
-    return {"Hello": "Agentic World"}
+async def read_root():
+    qdrant_healthy = await check_qdrant_health()
+    hindsight_healthy = await check_hindsight_health()
+    return {"Hello": "Agentic World", "Qdrant Healthy": qdrant_healthy, "Hindsight Healthy": hindsight_healthy}
 
 
 class Message(BaseModel):
@@ -28,7 +90,8 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     username: str
-    messages: List[Message]
+    messages: List[Message] = Field(default_factory=list)
+    query: Optional[str] = None
 
 
 def _require_env(name: str) -> str:
@@ -36,6 +99,28 @@ def _require_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"{name} environment variable is not set.")
     return value
+
+
+def _normalize_usage(usage: Any) -> Optional[dict[str, int]]:
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        input_count = usage.get("input_token_count") or usage.get("inputTokenCount")
+        output_count = usage.get("output_token_count") or usage.get("outputTokenCount")
+        total_count = usage.get("total_token_count") or usage.get("totalTokenCount")
+    else:
+        input_count = getattr(usage, "input_token_count", None)
+        output_count = getattr(usage, "output_token_count", None)
+        total_count = getattr(usage, "total_token_count", None)
+
+    if input_count is None and output_count is None and total_count is None:
+        return None
+
+    return {
+        "inputTokenCount": input_count or 0,
+        "outputTokenCount": output_count or 0,
+        "totalTokenCount": total_count or 0,
+    }
 
 
 client = AzureOpenAIChatClient(
@@ -48,6 +133,10 @@ client = AzureOpenAIChatClient(
 # This ensures memory persists across requests for all users
 print("Initializing Agent Framework Memory Agent...")
 agent_framework_memory_agent = AgentFrameworkMemoryAgent(client).get_agent_framework_memory_agent()
+mem0_agent = Mem0Agent(client).get_mem0_agent()
+mem0_memory_reader = Mem0Tool()
+hindsight_agent = HindsightAgent(client).get_hindsight_agent()
+cognee_agent = CogneeAgent(client).get_cognee_agent()
 print("Agent initialized and ready")
 
 # Store agent instances per user - each user gets their own agent with isolated memory.
@@ -56,70 +145,6 @@ print("Agent initialized and ready")
 print("Agent Framework Memory system initialized")
 user_agents = {}
 user_threads = {}
-
-
-def _build_messages(request: ChatRequest) -> List[dict]:
-    messages = [{"role": "system", "content": f"You are assisting user: {request.username}"}]
-    messages.extend({"role": m.role, "content": m.content} for m in request.messages)
-    return messages
-
-
-# Destroy this soon.
-def _run_chat(messages: List[dict]) -> Any:
-    # Attempt common method names for the AzureOpenAIChatClient.
-    if hasattr(chat_client, "complete"):
-        return chat_client.complete(messages)
-    if hasattr(chat_client, "chat"):
-        return chat_client.chat(messages)
-    if hasattr(chat_client, "create"):
-        return chat_client.create(messages=messages)
-    raise NotImplementedError("Chat client method not found.")
-
-# Destroy this soon.
-def _extract_text_and_usage(response: Any) -> tuple[Optional[str], dict]:
-    if isinstance(response, dict):
-        text = response.get("message") or response.get("text") or response.get("content")
-        usage = response.get("usage") or {}
-        return text, usage
-
-    text = (
-        getattr(response, "message", None)
-        or getattr(response, "text", None)
-        or getattr(response, "content", None)
-    )
-
-    usage_obj = getattr(response, "usage", None)
-    usage = {}
-    if usage_obj:
-        usage = {
-            "inputTokenCount": getattr(usage_obj, "input_token_count", None)
-            or getattr(usage_obj, "inputTokenCount", None),
-            "outputTokenCount": getattr(usage_obj, "output_token_count", None)
-            or getattr(usage_obj, "outputTokenCount", None),
-            "totalTokenCount": getattr(usage_obj, "total_token_count", None)
-            or getattr(usage_obj, "totalTokenCount", None),
-        }
-    return text, usage
-
-# Destroy this soon.
-def _handle_request(request: ChatRequest) -> dict:
-    messages = _build_messages(request)
-
-    try:
-        response = _run_chat(messages)
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-
-    message_text, usage = _extract_text_and_usage(response)
-    
-    return {
-        "message": message_text,
-        "usage": {
-            "inputTokenCount": usage.get("inputTokenCount"),
-            "outputTokenCount": usage.get("outputTokenCount"),
-            "totalTokenCount": usage.get("totalTokenCount"),
-        },
-    }
 
 
 @app.post("/")
@@ -135,17 +160,11 @@ async def generic_agent(request: ChatRequest):
     ]
 
     response = await client.get_response(messages)
-    usage = response.usage_details
+    usage = _normalize_usage(response.usage_details)
 
-    return {
-        "message": response.messages[0].text,
-        "usage": {
-            "inputTokenCount": usage.input_token_count,
-            "outputTokenCount": usage.output_token_count,
-            "totalTokenCount": usage.total_token_count
-        },
-    }
-
+    if usage is None:
+        return {"message": response.messages[0].text}
+    return {"message": response.messages[0].text, "usage": usage}
 
 @app.post("/agent-framework")
 async def agent_framework(request: ChatRequest):
@@ -174,28 +193,131 @@ async def agent_framework(request: ChatRequest):
     ]
 
     response = await agent.run(messages, thread=thread)
-    usage = response.usage_details
+    usage = _normalize_usage(response.usage_details)
+    print(response.usage_details)
+    if usage is None:
+        return {"message": response.messages[0].text}
+    return {"message": response.messages[0].text, "usage": usage}
+
+@app.post("/agent-framework/memories")
+async def get_memories(request: ChatRequest):
+    print(f"Received request to get memories for user: {request.username}")
+    
+    # Get the user's agent if it exists
+    if request.username not in user_agents:
+        return {"message": "No memories found for this user"}
+    
+    agent = user_agents[request.username]
+    
+    # Access the memory from the agent's context provider (ClientDetailsMemoryTool)
+    context_provider = agent.context_provider
+    if context_provider and hasattr(context_provider, '_user_info'):
+        user_info = context_provider._user_info
+        memories = {
+            "username": user_info.username,
+            "spa_preferences": user_info.spa_preferences,
+            "preferred_hours": user_info.preferred_hours,
+        }
+    else:
+        memories = "No memories stored"
+    
     return {
-        "message": response.messages[0].text,
-        "usage": {
-            "inputTokenCount": usage.input_token_count,
-            "outputTokenCount": usage.output_token_count,
-            "totalTokenCount": usage.total_token_count,
-        },
+        "message": memories,
     }
+    
+@app.delete("/agent-framework/delete/{username}")
+async def delete_agent_framework_memory(username: str):
+    print(f"Received request to delete Agent Framework Memory Agent for user: {username}")
+    if username in user_agents:
+        del user_agents[username]
+    if username in user_threads:
+        del user_threads[username]
+    return {"message": f"Deleted Agent Framework Memory Agent for user: {username}"}
 
 
 @app.post("/mem0")
-def mem0(request: ChatRequest):
-    return _handle_request(request)
+async def mem0(request: ChatRequest):
+    print(f"Received request for Mem0 Agent from user: {request.username}")
+    messages = [
+        ChatMessage(role="system", text=f"You are assisting user {request.username}"),
+        *(
+            ChatMessage(role=m.role, text=m.content)
+            for m in request.messages
+        ),
+    ]
+
+    response = await mem0_agent.run(messages, username=request.username)
+    usage = _normalize_usage(response.usage_details)
+    print(response.usage_details)
+    if usage is None:
+        return {"message": response.messages[0].text}
+    return {"message": response.messages[0].text, "usage": usage}
+
+@app.post("/mem0/memories")
+async def mem0_get_memories(request: ChatRequest):
+    print(f"Received request to get Mem0 memories for user: {request.username}")
+    memories = await mem0_memory_reader.get_memories(
+        request.username,
+        query=request.query,
+        limit=10,
+    )
+    return {
+        "message": memories,
+    }
 
 
 @app.post("/cognee")
-def cognee(request: ChatRequest):
-    return _handle_request(request)
+async def cognee(request: ChatRequest):
+    print(f"Received request for Cognee Agent from user: {request.username}")
+    messages = [
+        ChatMessage(role="system", text=f"You are assisting user {request.username}"),
+        *(
+            ChatMessage(role=m.role, text=m.content)
+            for m in request.messages
+        ),
+    ]
+
+    response = await cognee_agent.run(messages, username=request.username)
+    usage = _normalize_usage(response.usage_details)
+    return {
+        "message": response.messages[0].text,
+        "usage": usage,
+    }
+
+@app.post("/cognee/memories")
+async def cognee_get_memories(request: ChatRequest):
+    print(f"Received request to get Cognee memories for user: {request.username}")
+    context_provider = cognee_agent.context_provider
+
+    memories = await context_provider.get_memories(request.username)
+    print("Retrieved memories:", memories)
+
+    return {"message": memories}
 
 
 @app.post("/hindsight")
-def hindsight(request: ChatRequest):
-    return _handle_request(request)
+async def hindsight(request: ChatRequest):
+    print(f"Received request for Hindsight Agent from user: {request.username}")
+    messages = [
+        ChatMessage(role="system", text=f"You are assisting user {request.username}"),
+        *(
+            ChatMessage(role=m.role, text=m.content)
+            for m in request.messages
+        ),
+    ]
+    response = await hindsight_agent.run(messages, username=request.username)
+    usage = _normalize_usage(response.usage_details)
+    if usage is None:
+        return {"message": response.messages[0].text}
+    return {"message": response.messages[0].text, "usage": usage}
+
+@app.post("/hindsight/memories")
+async def hindsight_get_memories(request: ChatRequest):
+    print(f"Received request to get Hindsight memories for user: {request.username}")
+    context_provider = hindsight_agent.context_provider
+
+    memories = await context_provider.get_memories(request.username)
+    print("Retrieved memories:", memories)
+
+    return {"message": memories.text}
 

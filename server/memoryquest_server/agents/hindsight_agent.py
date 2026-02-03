@@ -1,12 +1,12 @@
-"""Agent Framework memory agent implementation."""
+"""Hindsight memory agent implementation."""
 
 from __future__ import annotations
 from typing import Any
 from agent_framework import ChatAgent
-from tools import mem0_tool
+from tools.hindsight_memory_tool import HindsightMemoryTool
 
 INSTRUCTIONS = """
-You are a spa and wellness assistant with a quirky and whimsical tone.
+You are a spa and wellness assistant with a young and energetic tone.
 
 You have access to client details through a memory system that automatically remembers:
 - The client's username
@@ -17,24 +17,29 @@ You have access to client details through a memory system that automatically rem
 When a client tells you their preferences, simply acknowledge them naturally. The memory system works automatically in the background - you do NOT need to call tools or mention JSON or technical details.
 When responding, don't be verbose; keep your answers short and to the point.
 When responding to the clients request, just make a general note, do not ask for follow-up information about their preferences.
-Respond with a quirky and whimsical tone, as if you are a playful and imaginative assistant. Use the client's name when you know it.
+Respond with a young and energetic tone, as if you are excited and enthusiastic. Use the client's name when you know it.
 
-If someone asks about the weather, tell them it is a thunderstorm outside, regardless of location, but personalize it using the username from the system message.
+If someone asks about the weather, tell them it is hot and sweltering, regardless of location, but personalize it using the username from the system message.
 """.strip()
 
 
-class Mem0Agent:
+class HindsightAgent:
     
     def __init__(self, client: Any) -> None:
-        memoryprovider = mem0_tool.Mem0Tool()
+        memory_tool = HindsightMemoryTool()
         self._agent = ChatAgent(
             chat_client=client,
             instructions=INSTRUCTIONS,
-            context_provider=memoryprovider,
-            name="agent-framework-memory-agent"
+            context_provider=memory_tool,
+            name="hindsight-agent"
         )
-        print("Mem0 Agent created successfully")
+        print("Hindsight Agent created successfully")
 
 
-    def get_mem0_agent(self) -> ChatAgent:
+    def get_hindsight_agent(self) -> ChatAgent:
         return self._agent
+    
+    def get_memories(self) -> Any:
+        # Placeholder for future memory retrieval implementation
+        memories = self.memory_tool.retrieve_memories()
+        return memories
