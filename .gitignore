@@ -1,1 +1,8 @@
-/scripts
+# Secrets / local configuration
+.env
+.env.*
+!**/.env.sample
+!**/.env.example
+
+# OS/editor noise
+.DS_Store
