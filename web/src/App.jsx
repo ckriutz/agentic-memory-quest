@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { UserCard } from './components/UserCard'
 import { Banner } from './components/Banner'
 import { UsageStats } from './components/UsageStats'
 import { ClearChatCard } from './components/ClearChatCard'
 import { MemoriesCard } from './components/MemoriesCard'
+import { useMemories } from './hooks/useMemories'
 
 const STORAGE_KEY = 'amq:userName'
 const AGENT_URL = 'http://localhost:8000/'
@@ -15,8 +16,19 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [memoryFramework, setMemoryFramework] = useState('none')
   const [usage, setUsage] = useState(null)
-  const [memories, setMemories] = useState(null)
-  const [isDeletingMemories, setIsDeletingMemories] = useState(false)
+  const getEndpoint = useCallback(
+    () => (memoryFramework === 'none' ? AGENT_URL : `${AGENT_URL}${memoryFramework}`),
+    [memoryFramework]
+  )
+
+  const {
+    memories,
+    setMemories,
+    isMemoriesLoading,
+    isDeletingMemories,
+    fetchMemories,
+    deleteMemories,
+  } = useMemories({ username: name, getEndpoint })
 
   // This isn't important yet, but later we can use it for session management.
   const handleLogin = (userName) => {
@@ -29,6 +41,7 @@ function App() {
     localStorage.removeItem(STORAGE_KEY)
     setMessages([])
     setUsage(null)
+    setMemories(null)
   }
 
   const handleClearChat = () => {
@@ -37,60 +50,7 @@ function App() {
     setMemories(null)
   }
 
-  const getEndpoint = () => (memoryFramework === 'none' ? AGENT_URL : `${AGENT_URL}${memoryFramework}`)
-
-  const fetchMemories = async (updatedMessages) => {
-    try {
-      const endpoint = getEndpoint()
-      const memoriesEndpoint = `${endpoint}/memories`
-      const memoriesResponse = await fetch(memoriesEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: name.toLowerCase(),
-          messages: updatedMessages.filter(m => m.role !== 'activity')
-        })
-      })
-
-      if (memoriesResponse.ok) {
-        const memoriesData = await memoriesResponse.json()
-        console.log('Memories data:', memoriesData)
-        setMemories(memoriesData)
-      }
-    } catch (memoryError) {
-      console.error('Error fetching memories:', memoryError)
-    }
-  }
-
-  const handleDeleteMemories = async () => {
-    if (!name || isDeletingMemories) return
-    setIsDeletingMemories(true)
-
-    try {
-      const endpoint = getEndpoint()
-      const deleteEndpoint = `${endpoint}/delete/${name.toLowerCase()}`
-
-      const response = await fetch(deleteEndpoint, { method: 'DELETE' })
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-      let deleteData = null
-      try {
-        deleteData = await response.json()
-      } catch {
-        deleteData = { message: 'Memories deleted.' }
-      }
-
-      setMemories(deleteData)
-      console.log('Memories deleted', deleteData)
-    } catch (error) {
-      console.error('Error deleting memories:', error)
-    } finally {
-      setIsDeletingMemories(false)
-    }
-  }
+  const handleDeleteMemories = deleteMemories
 
   // This is the function that sends user messages to the agent and processes responses.
   const sendMessage = async () => {
@@ -106,8 +66,7 @@ function App() {
     // This creates a new agent instance with the updated message history
     // and runs it to get a response.
     try {
-      // Select endpoint based on memory framework
-      const endpoint = memoryFramework === 'none' ? AGENT_URL : `${AGENT_URL}${memoryFramework}`
+      const endpoint = getEndpoint()
 
       console.log(`Using agent URL: ${endpoint}`)
 
@@ -141,13 +100,14 @@ function App() {
         setUsage(data.usage)
       }
 
-      // Fetch memories after successful response (separate from chat)
-      await fetchMemories(updatedMessages)
+      
 
     } catch (error) {
       console.error('Agent error:', error)
     } finally {
       setIsLoading(false)
+      // Fetch memories after successful response (separate from chat)
+      await fetchMemories(updatedMessages)
     }
   }
 
@@ -163,6 +123,7 @@ function App() {
         memoryFramework={memoryFramework}
         onDeleteMemories={handleDeleteMemories}
         deleteMemoriesDisabled={!name || isDeletingMemories}
+        isMemoriesLoading={isMemoriesLoading}
       />
       <ChatInterface
         messages={messages}
@@ -179,7 +140,7 @@ function App() {
 }
 
 // Main content area that shows login, welcome, or activity component
-function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled }) {
+function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled, isMemoriesLoading }) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto" style={{ backgroundImage: 'url(/images/resort_image.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
       {!name ? (
@@ -200,6 +161,7 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
               memoryFramework={memoryFramework}
               onDeleteMemories={onDeleteMemories}
               deleteMemoriesDisabled={deleteMemoriesDisabled}
+              isLoading={isMemoriesLoading}
             />
           </div>
           <div className="mt-6"></div>
