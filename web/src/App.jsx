@@ -7,7 +7,9 @@ import { MemoriesCard } from './components/MemoriesCard'
 import { useMemories } from './hooks/useMemories'
 
 const STORAGE_KEY = 'amq:userName'
-const AGENT_URL = 'http://localhost:8000/'
+// In production this is proxied by nginx (see web/nginx/default.conf.template).
+// In development, we call the FastAPI server directly.
+const AGENT_URL = import.meta.env.DEV ? 'http://localhost:8000/' : '/api/'
 
 function App() {
   const [name, setName] = useState(() => localStorage.getItem(STORAGE_KEY) || '')
