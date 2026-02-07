@@ -90,15 +90,17 @@ class CogneeMemoryTool(ContextProvider):
         def _extract(source):
             if isinstance(source, ChatMessage):
                 role = getattr(source.role, "value", None) or str(source.role)
-                content_lines.append(f"{role}: {source.text}")
+                if role == "user":
+                    content_lines.append(f"{role}: {source.text}")
             elif isinstance(source, Sequence):
                 for msg in source:
                     role = getattr(msg.role, "value", None) or str(msg.role)
-                    content_lines.append(f"{role}: {msg.text}")
+                    if role == "user":
+                        content_lines.append(f"{role}: {msg.text}")
 
         _extract(request_messages)
-        if response_messages:
-            _extract(response_messages)
+        # Intentionally ignore response_messages (assistant output) to avoid storing
+        # the assistant's own suggestions as user facts/preferences.
         
         content = "\n".join(content_lines)
 

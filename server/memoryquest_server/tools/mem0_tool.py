@@ -114,14 +114,27 @@ class Mem0Tool(ContextProvider):
             return getattr(role, "value", None) or str(role)
 
         def _append_messages(source: ChatMessage | Sequence[ChatMessage]) -> list[dict[str, str]]:
+            # Only persist user-provided messages.
+            # If we store assistant output too, the assistant's own suggestions can become "memories".
             if isinstance(source, ChatMessage):
-                return [{"role": _normalize_role(source.role), "content": source.text}]
-            return [{"role": _normalize_role(msg.role), "content": msg.text} for msg in source]
+                role = _normalize_role(source.role)
+                if role != "user":
+                    return []
+                return [{"role": role, "content": source.text}]
+            out: list[dict[str, str]] = []
+            for msg in source:
+                role = _normalize_role(msg.role)
+                if role == "user":
+                    out.append({"role": role, "content": msg.text})
+            return out
 
         messages: list[dict[str, str]] = []
         messages.extend(_append_messages(request_messages))
-        if response_messages is not None:
-            messages.extend(_append_messages(response_messages))
+
+        # Intentionally ignore response_messages (assistant output).
+
+        if not messages:
+            return
 
         # Performance Improvement: Offload the storage to a background task
         # so we don't block the response to the user.

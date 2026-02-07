@@ -76,14 +76,21 @@ class HindsightMemoryTool(ContextProvider):
         messages: list[dict[str, str]] = []
         
         def _add_msgs(source: ChatMessage | Sequence[ChatMessage]):
+            # Only retain user-provided content.
+            # If we store assistant responses too, the assistant's own suggestions can be recalled later
+            # and treated like user facts/preferences.
             if isinstance(source, ChatMessage):
-                messages.append({"role": _normalize_role(source.role), "content": source.text})
+                role = _normalize_role(source.role)
+                if role == "user":
+                    messages.append({"role": role, "content": source.text})
             else:
-                messages.extend([{"role": _normalize_role(msg.role), "content": msg.text} for msg in source])
+                for msg in source:
+                    role = _normalize_role(msg.role)
+                    if role == "user":
+                        messages.append({"role": role, "content": msg.text})
 
         _add_msgs(request_messages)
-        if response_messages:
-            _add_msgs(response_messages)
+        # Intentionally ignore response_messages (assistant output)
 
         try:
             content = json.dumps(messages, ensure_ascii=False)

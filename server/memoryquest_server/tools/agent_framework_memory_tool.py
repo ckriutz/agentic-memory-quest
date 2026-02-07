@@ -51,13 +51,25 @@ class ClientDetailsMemoryTool(ContextProvider):
         """Extract user information from the conversation after each agent invocation."""
         print("ClientDetailsMemoryTool invoked - extracting user information")
 
-        # Build conversation text from request and response messages
-        conversation_text = self._build_conversation_text(request_messages, response_messages)
+        # Only learn from what the USER actually said.
+        # Request messages can include prior assistant turns (from the API caller), and response_messages
+        # is always assistant text. If we include those, we end up storing the agent's own suggestions
+        # as if they were user preferences.
+        conversation_text = self._build_conversation_text(
+            request_messages=request_messages,
+            response_messages=None,
+            allowed_roles={"user"},
+        )
 
         # Create extraction prompt as a user message
         extraction_prompt = f"""
             You are a data extraction assistant. Extract the following information from the conversation.
             You MUST respond with ONLY a valid JSON object, no other text or explanation.
+
+            IMPORTANT:
+            - Only use statements made by the USER.
+            - Do NOT infer preferences from the assistant's recommendations or from the topic of conversation.
+            - If the user did not explicitly state a value, use null.
 
             CONVERSATION:
             {conversation_text}
@@ -100,8 +112,11 @@ class ClientDetailsMemoryTool(ContextProvider):
             print(f"Error extracting user info: {e}")
 
     # This is a gentle helper to build conversation text from messages so we can extract.
-    def _build_conversation_text(self,request_messages: ChatMessage | Sequence[ChatMessage],response_messages: ChatMessage | Sequence[ChatMessage] | None = None,) -> str:
-        """Build a text representation of the conversation."""
+    def _build_conversation_text(self,request_messages: ChatMessage | Sequence[ChatMessage],response_messages: ChatMessage | Sequence[ChatMessage] | None = None,allowed_roles: set[str] | None = None,) -> str:
+        """Build a text representation of the conversation.
+
+        If allowed_roles is provided, only messages whose role is in allowed_roles are included.
+        """
         req_list = [request_messages] if isinstance(request_messages, ChatMessage) else list(request_messages)
         resp_list = []
         if response_messages:
@@ -110,6 +125,8 @@ class ClientDetailsMemoryTool(ContextProvider):
         conversation_text = ""
         for msg in req_list + resp_list:
             role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+            if allowed_roles is not None and role not in allowed_roles:
+                continue
             content = msg.text if hasattr(msg, 'text') else str(msg)
             conversation_text += f"{role}: {content}\n"
         
