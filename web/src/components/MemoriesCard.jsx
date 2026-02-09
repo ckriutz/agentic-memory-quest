@@ -6,8 +6,11 @@ const frameworkNames = {
   'cognee': 'Cognee',
 }
 
-export function MemoriesCard({ memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled }) {
-  if (!memories) return null
+function Skeleton({ className = '' }) {
+  return <div className={`animate-pulse rounded-md bg-gray-200/80 ${className}`} />
+}
+
+export function MemoriesCard({ memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled, isLoading = false }) {
 
   const frameworkLabel = frameworkNames[memoryFramework] || ''
   const title = frameworkLabel ? `${frameworkLabel} Memories` : 'Memories'
@@ -42,9 +45,33 @@ export function MemoriesCard({ memories, memoryFramework, onDeleteMemories, dele
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6 md:col-span-2">
-      <h3 className="font-bold text-lg mb-4">{title}</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-bold text-lg">{title}</h3>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+            <span>Updating…</span>
+          </div>
+        )}
+      </div>
       <div className="space-y-2">
-        {memories.message ? (
+        {!memories ? (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-3/5" />
+              <Skeleton className="h-4 w-11/12" />
+              <Skeleton className="h-4 w-4/5" />
+            </div>
+            <div className="space-y-2">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-4/5" />
+            </div>
+            <div className="text-xs text-gray-500">
+              Memories will appear here after you chat.
+            </div>
+          </div>
+        ) : memories.message ? (
           <div className="text-sm text-gray-700">
             {renderMessage(memories.message)}
           </div>
@@ -62,7 +89,7 @@ export function MemoriesCard({ memories, memoryFramework, onDeleteMemories, dele
           </pre>
         )}
       </div>
-      <div className="mt-6 pt-4 border-t">
+      {/*<div className="mt-6 pt-4 border-t">
         <button
           onClick={onDeleteMemories}
           disabled={deleteMemoriesDisabled}
@@ -70,7 +97,7 @@ export function MemoriesCard({ memories, memoryFramework, onDeleteMemories, dele
         >
           Delete Memories
         </button>
-      </div>
+      </div>*/}
     </div>
   )
 }

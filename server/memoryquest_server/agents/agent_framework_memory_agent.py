@@ -3,7 +3,7 @@
 from __future__ import annotations
 from typing import Any
 from agent_framework import ChatAgent, ChatOptions
-from tools import client_details_memory_tool
+from tools import agent_framework_memory_tool
 
 
 INSTRUCTIONS = """
@@ -28,7 +28,7 @@ class AgentFrameworkMemoryAgent:
     def __init__(self, client: Any) -> None:
         # Create a ChatAgent with the client and instructions
         # ChatAgent signature: (chat_client, instructions, *, name=None, ...)
-        memory_provider = client_details_memory_tool.ClientDetailsMemoryTool()
+        memory_provider = agent_framework_memory_tool.ClientDetailsMemoryTool()
         self._agent = ChatAgent(
             chat_client=client,
             instructions=INSTRUCTIONS,
