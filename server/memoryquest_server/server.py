@@ -129,14 +129,33 @@ client = AzureOpenAIChatClient(
     deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT") or "gpt-5-mini",
 )
 
+gpt_4_client = AzureOpenAIChatClient(
+    api_key=_require_env("AZURE_OPENAI_API_KEY"),
+    endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
+    deployment_name=os.getenv("GPT4_DEPLOYMENT_NAME") or "gpt-5-mini",
+)
+
+
+grok_client = AzureOpenAIChatClient(
+    api_key=_require_env("AZURE_OPENAI_API_KEY"),
+    endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
+    deployment_name=os.getenv("GROK_DEPLOYMENT_NAME") or "gpt-5-mini",
+)
+
+deepseek_client = AzureOpenAIChatClient(
+    api_key=_require_env("AZURE_OPENAI_API_KEY"),
+    endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
+    deployment_name=os.getenv("DEEPSEEK_DEPLOYMENT_NAME") or "gpt-5-mini",
+)
+
 # Create a single, persistent agent instance with memory
 # This ensures memory persists across requests for all users
 print("Initializing Agent Framework Memory Agent...")
 agent_framework_memory_agent = AgentFrameworkMemoryAgent(client).get_agent_framework_memory_agent()
-mem0_agent = Mem0Agent(client).get_mem0_agent()
+mem0_agent = Mem0Agent(grok_client).get_mem0_agent()
 mem0_memory_reader = Mem0Tool()
 hindsight_agent = HindsightAgent(client).get_hindsight_agent()
-cognee_agent = CogneeAgent(client).get_cognee_agent()
+cognee_agent = CogneeAgent(grok_client).get_cognee_agent()
 print("Agent initialized and ready")
 
 # Store agent instances per user - each user gets their own agent with isolated memory.
@@ -159,7 +178,7 @@ async def generic_agent(request: ChatRequest):
         ),
     ]
 
-    response = await client.get_response(messages)
+    response = await gpt_4_client.get_response(messages)
     usage = _normalize_usage(response.usage_details)
 
     if usage is None:

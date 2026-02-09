@@ -1,4 +1,5 @@
 
+import asyncio
 import os
 import cognee
 from typing import Any, MutableSequence, Sequence
@@ -6,6 +7,7 @@ from cognee_community_vector_adapter_qdrant import register
 from cognee_community_vector_adapter_qdrant.qdrant_adapter import QDrantAdapter
 from qdrant_client import AsyncQdrantClient
 from cognee.modules.data.exceptions.exceptions import DatasetNotFoundError
+from cognee.exceptions import CogneeApiError
 from agent_framework import ChatMessage, Context, ContextProvider
 from dotenv import load_dotenv
 
@@ -112,10 +114,19 @@ class CogneeMemoryTool(ContextProvider):
         os.environ["COGNEE_VECTOR_DB_EMBEDDING_MODEL"] = embedding_model
         os.environ["COGNEE_VECTOR_DB_PROVIDER"] = vector_db_provider
         os.environ["COGNEE_VECTOR_DB_URL"] = vector_db_url
+
+        # Relational (SQLite) storage — ensure Cognee writes to a writable path
+        # instead of defaulting to its pip-installed package directory.
+        db_path = os.getenv("DB_PATH", "/tmp/cognee_data/databases")
+        db_name = os.getenv("DB_NAME", "cognee_db")
+        os.environ["DB_PATH"] = db_path
+        os.environ["DB_NAME"] = db_name
+        os.makedirs(db_path, exist_ok=True)
         
         print(
             f"Cognee configured: LLM={llm_model}, Embedding={embedding_model}, "
-            f"VectorDB={vector_db_provider} at {vector_db_url}, dataset={self.dataset_name}"
+            f"VectorDB={vector_db_provider} at {vector_db_url}, "
+            f"RelationalDB=sqlite at {db_path}/{db_name}, dataset={self.dataset_name}"
         )
 
     def _register_vector_adapter(self) -> None:
@@ -155,12 +166,17 @@ class CogneeMemoryTool(ContextProvider):
 
         dataset_name = self._dataset_name_for_user(username)
 
-        result = await cognee.add(content, dataset_name=dataset_name)
-        print(f"Cognee add result: {result}")
+        try:
+            result = await cognee.add(content, dataset_name=dataset_name)
+            print(f"Cognee add result: {result}")
 
-        # Process with LLMs to build the knowledge graph
-        await cognee.cognify(datasets=dataset_name)
-        print("Cognee cognify completed")
+            # Process with LLMs to build the knowledge graph
+            await cognee.cognify(datasets=dataset_name)
+            print("Cognee cognify completed")
+        except asyncio.CancelledError:
+            print("Cognee invoked() cancelled (server shutting down)")
+        except Exception as exc:
+            print(f"Cognee invoked() failed: {exc}")
 
     async def invoking(self, messages: ChatMessage | MutableSequence[ChatMessage],**kwargs: Any,) -> Context:
         """Called before the agent processes messages - can inject context from cognee."""
@@ -169,10 +185,10 @@ class CogneeMemoryTool(ContextProvider):
         dataset_name = self._dataset_name_for_user(username)
 
         results: Any = None
+        memories: list[str] = []
 
         try:
             if not await self._dataset_exists(dataset_name):
-                memories = []
                 return Context(
                     messages=[
                         ChatMessage(
@@ -187,8 +203,13 @@ class CogneeMemoryTool(ContextProvider):
                 datasets=dataset_name,
             )
             memories = self._extract_search_result_texts(results)
-        except DatasetNotFoundError:
-            memories = []
+        except asyncio.CancelledError:
+            print("Cognee invoking() cancelled (server shutting down)")
+        except (DatasetNotFoundError, CogneeApiError) as exc:
+            # CogneeApiError covers SearchPreconditionError (no data added yet)
+            print(f"Cognee search skipped (no prior data): {exc}")
+        except Exception as exc:
+            print(f"Cognee search failed unexpectedly: {exc}")
         
         print(f"Cognee search results: {results}")
         return Context(
@@ -217,7 +238,14 @@ class CogneeMemoryTool(ContextProvider):
 
             results = await cognee.search(query_text=search_query, datasets=dataset_name)
             memories = self._extract_search_result_texts(results)
-        except DatasetNotFoundError:
+        except asyncio.CancelledError:
+            print("Cognee get_memories cancelled (server shutting down)")
+            memories = []
+        except (DatasetNotFoundError, CogneeApiError) as exc:
+            print(f"Cognee get_memories skipped (no prior data): {exc}")
+            memories = []
+        except Exception as exc:
+            print(f"Cognee get_memories failed unexpectedly: {exc}")
             memories = []
 
         if limit and limit > 0:
