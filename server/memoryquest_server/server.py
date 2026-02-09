@@ -1,10 +1,15 @@
 import os
+import warnings
 import httpx
+from contextlib import asynccontextmanager
 from typing import List, Literal, Optional, Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+# Suppress harmless aiohttp deprecation warning about enable_cleanup_closed
+warnings.filterwarnings("ignore", message="enable_cleanup_closed", category=DeprecationWarning)
 
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatMessage
@@ -23,7 +28,19 @@ if os.getenv("QDRANT_HOST", "").startswith("https://") and os.getenv("QDRANT_POR
     print("Adjusting QDRANT_PORT to 443 for HTTPS connection in server startup")
     os.environ["QDRANT_PORT"] = "443"
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup/shutdown lifecycle."""
+    yield
+    # Shutdown: drain Cognee background tasks to avoid unclosed sessions
+    try:
+        cognee_ctx = cognee_agent.context_provider
+        if hasattr(cognee_ctx, "shutdown"):
+            await cognee_ctx.shutdown()
+    except Exception:
+        pass
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -123,12 +140,30 @@ client = AzureOpenAIChatClient(
     deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT") or "gpt-5-mini",
 )
 
+grok_client = AzureOpenAIChatClient(
+    api_key=_require_env("AZURE_OPENAI_API_KEY"),
+    endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
+    deployment_name=os.getenv("GROK_DEPLOYMENT_NAME") or "gpt-5-mini",
+)
+
+gpt_4_client = AzureOpenAIChatClient(
+    api_key=_require_env("AZURE_OPENAI_API_KEY"),
+    endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
+    deployment_name=os.getenv("GPT4_DEPLOYMENT_NAME") or "gpt-5-mini",
+)
+
+deepseek_clinet = AzureOpenAIChatClient(
+    api_key=_require_env("AZURE_OPENAI_API_KEY"),
+    endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
+    deployment_name=os.getenv("DEEPSEEK_DEPLOYMENT_NAME") or "gpt-5-mini",
+)
+
 # 2. Singleton Agents (Stateless wrappers around DB-backed memory)
 # These agents don't hold conversational state in Python memory, so we can reuse them.
 print("Initializing Persistent Agents...")
 mem0_agent = Mem0Agent(client).get_mem0_agent()
-cognee_agent = CogneeAgent(client).get_cognee_agent()
-hindsight_agent = HindsightAgent(client).get_hindsight_agent()
+cognee_agent = CogneeAgent(deepseek_clinet).get_cognee_agent()
+hindsight_agent = HindsightAgent(grok_client).get_hindsight_agent()
 
 # 3. Stateful Agents (Held in memory)
 # The AgentFrameworkMemoryAgent holds extracted details in python class variables, 
