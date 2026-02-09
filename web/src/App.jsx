@@ -3,6 +3,7 @@ import { UserCard } from './components/UserCard'
 import { Banner } from './components/Banner'
 import { UsageStats } from './components/UsageStats'
 import { ClearChatCard } from './components/ClearChatCard'
+import { GitHubRepoCard } from './components/GitHubRepoCard'
 import { MemoriesCard } from './components/MemoriesCard'
 import { useMemories } from './hooks/useMemories'
 
@@ -18,6 +19,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [memoryFramework, setMemoryFramework] = useState('none')
   const [usage, setUsage] = useState(null)
+  const inFlightControllerRef = useRef(null)
   const getEndpoint = useCallback(
     () => (memoryFramework === 'none' ? AGENT_URL : `${AGENT_URL}${memoryFramework}`),
     [memoryFramework]
@@ -52,11 +54,32 @@ function App() {
     setMemories(null)
   }
 
+  const handleMemoryFrameworkChange = (nextFramework) => {
+    // If a request is in-flight, abort it so a late response can't re-populate chat.
+    if (inFlightControllerRef.current) {
+      inFlightControllerRef.current.abort()
+      inFlightControllerRef.current = null
+    }
+
+    setMemoryFramework(nextFramework)
+    handleClearChat()
+    setInput('')
+    setIsLoading(false)
+  }
+
   const handleDeleteMemories = deleteMemories
 
   // This is the function that sends user messages to the agent and processes responses.
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return
+
+    // Ensure only one in-flight request at a time.
+    if (inFlightControllerRef.current) {
+      inFlightControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    inFlightControllerRef.current = controller
+    let didAbort = false
 
     // Add user message to state.
     const userMessage = { role: 'user', content: input }
@@ -78,6 +101,7 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
           username: name.toLowerCase(),
           messages: updatedMessages.filter(m => m.role !== 'activity')  // Only send chat messages
@@ -105,11 +129,20 @@ function App() {
       
 
     } catch (error) {
+      if (error?.name === 'AbortError') {
+        didAbort = true
+        return
+      }
       console.error('Agent error:', error)
     } finally {
       setIsLoading(false)
+      if (inFlightControllerRef.current === controller) {
+        inFlightControllerRef.current = null
+      }
       // Fetch memories after successful response (separate from chat)
-      await fetchMemories(updatedMessages)
+      if (!didAbort) {
+        await fetchMemories(updatedMessages)
+      }
     }
   }
 
@@ -135,7 +168,7 @@ function App() {
         isLoading={isLoading}
         name={name}
         memoryFramework={memoryFramework}
-        onMemoryFrameworkChange={setMemoryFramework}
+        onMemoryFrameworkChange={handleMemoryFrameworkChange}
       />
     </div>
   )
@@ -147,7 +180,10 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
     <div className="flex-1 flex flex-col overflow-y-auto" style={{ backgroundImage: 'url(/images/resort_image.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
       {!name ? (
         <div className="flex-1 flex items-center justify-center p-4">
-          <UserCard onLogin={onLogin} onLogout={onLogout} />
+          <div className="w-full max-w-md space-y-3">
+            <UserCard onLogin={onLogin} onLogout={onLogout} />
+            <GitHubRepoCard />
+          </div>
         </div>
       ) : (
         <div className="w-full max-w-6xl mx-auto px-4 pt-6">
@@ -158,6 +194,7 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
             <UserCard name={name} onLogin={onLogin} onLogout={onLogout} />
             <UsageStats usage={usage} />
             <ClearChatCard onClearChat={onClearChat} />
+            <GitHubRepoCard />
             <MemoriesCard
               memories={memories}
               memoryFramework={memoryFramework}

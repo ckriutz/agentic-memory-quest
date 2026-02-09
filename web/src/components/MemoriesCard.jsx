@@ -10,7 +10,7 @@ function Skeleton({ className = '' }) {
   return <div className={`animate-pulse rounded-md bg-gray-200/80 ${className}`} />
 }
 
-export function MemoriesCard({ memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled, isLoading = false }) {
+export function MemoriesCard({ memories, memoryFramework, onDeleteMemories: _onDeleteMemories, deleteMemoriesDisabled: _deleteMemoriesDisabled, isLoading = false }) {
 
   const frameworkLabel = frameworkNames[memoryFramework] || ''
   const title = frameworkLabel ? `${frameworkLabel} Memories` : 'Memories'
