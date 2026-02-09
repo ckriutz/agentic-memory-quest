@@ -146,7 +146,7 @@ async def generic_agent(request: ChatRequest):
     print(f"Generic Agent request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
 
-    response = await client.get_response(messages)
+    response = await gpt_4_client.get_response(messages)
     usage = _normalize_usage(response.usage_details)
 
     return {"message": response.messages[0].text, "usage": usage}
