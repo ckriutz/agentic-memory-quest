@@ -97,12 +97,14 @@ class ClientDetailsMemoryTool(ContextProvider):
             extracted_info = self._extract_user_info(result)
             
             if extracted_info:
-                # Update user info with extracted data
-                if extracted_info.username:
+                # Only overwrite fields when the extracted value is meaningful.
+                # Short messages like "yes" or "ok" cause the LLM to return null
+                # or "unknown" for most fields — we must not erase valid data.
+                if extracted_info.username and extracted_info.username.lower() not in ("unknown", "null", "none"):
                     self._user_info.username = extracted_info.username
-                if extracted_info.spa_preferences:
+                if extracted_info.spa_preferences and extracted_info.spa_preferences.lower() not in ("unknown", "null", "none"):
                     self._user_info.spa_preferences = extracted_info.spa_preferences
-                if extracted_info.preferred_hours:
+                if extracted_info.preferred_hours and extracted_info.preferred_hours.lower() not in ("unknown", "null", "none"):
                     self._user_info.preferred_hours = extracted_info.preferred_hours
                 print(f"Updated user info: {self._user_info}")
             else:

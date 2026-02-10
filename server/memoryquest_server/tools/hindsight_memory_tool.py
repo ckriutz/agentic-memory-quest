@@ -109,11 +109,14 @@ class HindsightMemoryTool(ContextProvider):
             for msg in reversed(messages):
                 role = getattr(msg.role, "value", None) or str(msg.role)
                 if role == "user":
-                    query = msg.text
+                    # Short messages like "Yes" or "Ok" produce poor vector search results;
+                    # fall back to the generic query in that case.
+                    if len(msg.text) > 5:
+                        query = msg.text
                     break
         elif isinstance(messages, ChatMessage):
             role = getattr(messages.role, "value", None) or str(messages.role)
-            if role == "user":
+            if role == "user" and len(messages.text) > 5:
                 query = messages.text
 
         try:
