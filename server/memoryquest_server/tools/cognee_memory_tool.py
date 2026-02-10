@@ -42,13 +42,32 @@ class CogneeMemoryTool(ContextProvider):
         logger.info("Initializing Cognee Memory Tool")
         self.dataset_name = os.getenv("COGNEE_DATASET_NAME") or "main_dataset"
         self._background_tasks: set[asyncio.Task] = set()
+        self._setup_done = False
+        self._setup_lock = asyncio.Lock()
         self._configure_cognee()
         self._register_vector_adapter()
+
+    async def ensure_setup(self) -> None:
+        """Lazily initialize Cognee's database schema on first use."""
+        if self._setup_done:
+            return
+        async with self._setup_lock:
+            if self._setup_done:
+                return
+            try:
+                from cognee.modules.engine.operations.setup import setup
+                logger.info("Running Cognee database setup...")
+                await setup()
+                self._setup_done = True
+                logger.info("Cognee database setup complete.")
+            except Exception as e:
+                logger.error(f"Cognee setup failed: {e}")
 
     # --- ContextProvider interface ---
 
     async def invoking(self, messages: ChatMessage | MutableSequence[ChatMessage], **kwargs: Any) -> Context:
         """Called before the agent processes messages - injects relevant memories."""
+        await self.ensure_setup()
         username = kwargs.get("username") or "anonymous"
         dataset_name = self._dataset_name_for_user(username)
 
@@ -129,6 +148,7 @@ class CogneeMemoryTool(ContextProvider):
 
     async def get_memories(self, username: str, query: str | None = None, limit: int = 10) -> list[str]:
         """Retrieve memories for a given username from cognee."""
+        await self.ensure_setup()
         dataset_name = self._dataset_name_for_user(username)
         search_query = query or "user preferences overview"
 
@@ -170,6 +190,7 @@ class CogneeMemoryTool(ContextProvider):
 
     async def _background_save(self, username: str, content: str) -> None:
         """Background task to add data and rebuild knowledge graph."""
+        await self.ensure_setup()
         dataset_name = self._dataset_name_for_user(username)
         try:
             logger.debug(f"Background: Adding content for {dataset_name}")

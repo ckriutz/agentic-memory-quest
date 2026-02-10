@@ -180,10 +180,7 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
     <div className="flex-1 flex flex-col overflow-y-auto" style={{ backgroundImage: 'url(/images/resort_image.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
       {!name ? (
         <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md space-y-3">
-            <UserCard onLogin={onLogin} onLogout={onLogout} />
-            <GitHubRepoCard />
-          </div>
+          <UserCard onLogin={onLogin} onLogout={onLogout} />
         </div>
       ) : (
         <div className="w-full max-w-6xl mx-auto px-4 pt-6">
