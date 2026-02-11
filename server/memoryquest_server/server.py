@@ -402,15 +402,14 @@ async def foundry(request: ChatRequest):
     """
     Microsoft Foundry agent endpoint.
     
-    Currently returns stubbed data. Production implementation will:
-    - Connect to Microsoft Foundry API
-    - Use Foundry's memory management capabilities
-    - Return actual Foundry-managed responses
+    Uses Azure AI Foundry client if configured (AZURE_FOUNDRY_ENDPOINT set),
+    otherwise falls back to GPT-4 client. Memory management is currently stubbed
+    and ready for future implementation with FoundryMemoryTool.
     """
     print(f"Foundry request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
     
-    # Run agent with stubbed memory context
+    # Run agent (uses Foundry client or GPT-4 fallback)
     response = await foundry_agent.run(messages, username=request.username)
     usage = _normalize_usage(response.usage_details)
     
