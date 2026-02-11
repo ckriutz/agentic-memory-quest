@@ -65,9 +65,14 @@ class FoundryAgent:
         # If a Foundry client is provided, use it directly as the agent
         if foundry_client:
             self._agent = Agent(
-                chat_client=foundry_client,
+                client=foundry_client,
                 instructions=INSTRUCTIONS,
-                context_provider=None,  # TODO: Add FoundryMemoryTool() when available
+                # TODO: Integrate Foundry-specific memory management
+                # When ready, implement FoundryMemoryTool as a ContextProvider that:
+                # - Stores conversation history in Azure AI Foundry's memory store
+                # - Retrieves relevant context based on conversation_id or user identity
+                # - Integrates with Foundry's agent memory capabilities
+                context_provider=None,
                 name="foundry-agent"
             )
             print("Foundry Agent created with Azure AI Foundry client")
@@ -87,7 +92,7 @@ class FoundryAgent:
                     deployment_name=deployment,
                 )
                 self._agent = Agent(
-                    chat_client=fallback_client,
+                    client=fallback_client,
                     instructions=INSTRUCTIONS,
                     context_provider=None,
                     name="foundry-agent-fallback"
