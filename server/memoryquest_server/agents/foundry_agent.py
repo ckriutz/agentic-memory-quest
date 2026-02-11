@@ -48,7 +48,7 @@ class FoundryAgent:
     - Requires AZURE_FOUNDRY_ENDPOINT environment variable
     - Does not support API key authentication (not available for Azure AI Foundry)
     
-    Endpoint format: https://<resource>.services.ai.azure.com/api/projects/<project-name>
+    Endpoint format: https://<resource>.services.ai.azure.com/api/projects/<project>
     """
     
     def __init__(self, foundry_client: Any = None) -> None:

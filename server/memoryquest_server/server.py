@@ -185,7 +185,7 @@ def _create_foundry_client():
         print(f"Initializing Azure AI Foundry client with endpoint: {foundry_endpoint}")
         try:
             from agent_framework.azure import AzureAIClient
-            from azure.identity.aio import DefaultAzureCredential
+            from azure.identity import DefaultAzureCredential
             
             # Azure AI Foundry uses Azure AD authentication (not API keys)
             # DefaultAzureCredential will try multiple authentication methods:
