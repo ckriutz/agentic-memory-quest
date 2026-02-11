@@ -230,6 +230,7 @@ function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoadin
           <option value="mem0">Mem0</option>
           <option value="hindsight">Hindsight</option>
           <option value="cognee">Cognee</option>
+          <option value="agent/foundry">Foundry</option>
         </select>
       </div>
 

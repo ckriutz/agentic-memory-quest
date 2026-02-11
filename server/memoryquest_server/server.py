@@ -19,6 +19,7 @@ from agents.agent_framework_memory_agent import AgentFrameworkMemoryAgent
 from agents.cognee_agent import CogneeAgent
 from agents.hindsight_agent import HindsightAgent
 from agents.mem0_agent import Mem0Agent
+from agents.foundry_agent import FoundryAgent
 
 # --- Configuration & Initialization ---
 load_dotenv()
@@ -164,6 +165,8 @@ print("Initializing Persistent Agents...")
 mem0_agent = Mem0Agent(client).get_mem0_agent()
 cognee_agent = CogneeAgent(deepseek_clinet).get_cognee_agent()
 hindsight_agent = HindsightAgent(grok_client).get_hindsight_agent()
+foundry_agent_wrapper = FoundryAgent(gpt_4_client)
+foundry_agent = foundry_agent_wrapper.get_foundry_agent()
 
 # 3. Stateful Agents (Held in memory)
 # The AgentFrameworkMemoryAgent holds extracted details in python class variables, 
@@ -333,4 +336,55 @@ async def delete_hindsight_memory(username: str):
     else:
          # Fallback if the specific implementation hasn't been added to the Agent yet
         return {"message": "Delete operation not supported by Hindsight provider yet."}
+
+# --- Endpoints: Foundry (Stubbed) ---
+
+@app.post("/agent/foundry")
+async def foundry(request: ChatRequest):
+    """
+    Microsoft Foundry agent endpoint.
+    
+    Currently returns stubbed data. Production implementation will:
+    - Connect to Microsoft Foundry API
+    - Use Foundry's memory management capabilities
+    - Return actual Foundry-managed responses
+    """
+    print(f"Foundry request: {request.username}")
+    messages = _create_system_context(request.username, request.messages)
+    
+    # Run agent with stubbed memory context
+    response = await foundry_agent.run(messages, username=request.username)
+    usage = _normalize_usage(response.usage_details)
+    
+    return {"message": response.messages[0].text, "usage": usage}
+
+@app.post("/agent/foundry/memories")
+async def foundry_get_memories(request: ChatRequest):
+    """
+    Retrieve Foundry memories for a user.
+    
+    TODO: Replace with actual Foundry API integration:
+    - Query Microsoft Foundry memory store
+    - Return structured memory data
+    - Support filtering and search
+    """
+    memories = await foundry_agent_wrapper.get_memories(request.username)
+    return {"message": memories}
+
+@app.delete("/agent/foundry/delete/{username}")
+async def delete_foundry_memory(username: str):
+    """
+    Delete Foundry memories for a user.
+    
+    TODO: Replace with actual Foundry API integration:
+    - Connect to Microsoft Foundry endpoint
+    - Delete all user-specific memories
+    - Return confirmation
+    """
+    print(f"Deleting Foundry memories for: {username}")
+    result = await foundry_agent_wrapper.delete_user_memories(username)
+    if not result.get("deleted"):
+        return {"message": "No Foundry memories found", **result}
+    return {"message": f"Deleted Foundry memories for: {username}", **result}
+
 
