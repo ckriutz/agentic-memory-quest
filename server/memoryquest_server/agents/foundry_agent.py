@@ -44,8 +44,9 @@ class FoundryAgent:
     This agent integrates with Microsoft Azure AI Foundry for memory management and agent orchestration.
     
     Authentication:
-    - Uses Azure AD token authentication via DefaultAzureCredential or API key
-    - Requires AZURE_FOUNDRY_ENDPOINT and optionally AZURE_FOUNDRY_API_KEY environment variables
+    - Uses Azure AD token authentication via DefaultAzureCredential
+    - Requires AZURE_FOUNDRY_ENDPOINT environment variable
+    - Does not support API key authentication (not available for Azure AI Foundry)
     
     Endpoint format: https://<resource>.services.ai.azure.com/api/projects/<project-name>
     """

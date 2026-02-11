@@ -445,4 +445,3 @@ async def delete_foundry_memory(username: str):
         return {"message": "No Foundry memories found", **result}
     return {"message": f"Deleted Foundry memories for: {username}", **result}
 
-
