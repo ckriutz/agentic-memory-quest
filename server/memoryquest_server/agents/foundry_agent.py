@@ -1,8 +1,9 @@
 """Microsoft Foundry memory agent implementation."""
 
 from __future__ import annotations
+import os
 from typing import Any
-from agent_framework import ChatAgent
+from agent_framework import Agent
 
 INSTRUCTIONS = """
 You are a full-service resort assistant with a professional, helpful, and modern tone.
@@ -40,57 +41,117 @@ class FoundryAgent:
     """
     Microsoft Foundry Agent wrapper.
     
-    This agent integrates with Microsoft Foundry for memory management.
-    Currently uses stubbed data; production implementation will connect to actual Foundry API.
+    This agent integrates with Microsoft Azure AI Foundry for memory management and agent orchestration.
+    
+    Authentication:
+    - Uses Azure AD token authentication via DefaultAzureCredential or API key
+    - Requires AZURE_FOUNDRY_ENDPOINT and optionally AZURE_FOUNDRY_API_KEY environment variables
+    
+    Endpoint format: https://<resource>.services.ai.azure.com/api/projects/<project-name>
     """
     
-    def __init__(self, client: Any) -> None:
-        # TODO: Replace with actual Foundry memory provider when integration is complete
-        # from tools.foundry_memory_tool import FoundryMemoryTool
-        # memoryprovider = FoundryMemoryTool()
+    def __init__(self, foundry_client: Any = None) -> None:
+        """
+        Initialize the Foundry agent.
         
-        # For now, we use None as context_provider for stubbed implementation
-        self._agent = ChatAgent(
-            chat_client=client,
-            instructions=INSTRUCTIONS,
-            context_provider=None,  # TODO: Add FoundryMemoryTool() here
-            name="foundry-agent"
-        )
-        self._stub_memories = {}  # Stubbed memory storage
-        print("Foundry Agent created successfully (stubbed mode)")
+        Args:
+            foundry_client: Optional pre-configured AzureAIClient for Foundry.
+                          If not provided, will create one using environment variables.
+        """
+        # Store the foundry client if provided, otherwise we'll use a fallback
+        self._foundry_client = foundry_client
+        self._stub_memories = {}  # Fallback memory storage
+        
+        # If a Foundry client is provided, use it directly as the agent
+        if foundry_client:
+            self._agent = Agent(
+                chat_client=foundry_client,
+                instructions=INSTRUCTIONS,
+                context_provider=None,  # TODO: Add FoundryMemoryTool() when available
+                name="foundry-agent"
+            )
+            print("Foundry Agent created with Azure AI Foundry client")
+        else:
+            # Fallback: this shouldn't happen in production, but provides graceful degradation
+            print("Warning: No Foundry client provided, using stub mode")
+            from agent_framework.azure import AzureOpenAIChatClient
+            # Use a basic client as fallback (requires AZURE_OPENAI_* env vars)
+            api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
+            
+            if api_key and endpoint:
+                fallback_client = AzureOpenAIChatClient(
+                    api_key=api_key,
+                    endpoint=endpoint,
+                    deployment_name=deployment,
+                )
+                self._agent = Agent(
+                    chat_client=fallback_client,
+                    instructions=INSTRUCTIONS,
+                    context_provider=None,
+                    name="foundry-agent-fallback"
+                )
+                print("Foundry Agent created in fallback mode with OpenAI client")
+            else:
+                raise RuntimeError(
+                    "Foundry client not provided and fallback Azure OpenAI credentials not found. "
+                    "Please set AZURE_FOUNDRY_ENDPOINT or AZURE_OPENAI_* environment variables."
+                )
 
-    def get_foundry_agent(self) -> ChatAgent:
+    def get_foundry_agent(self) -> Agent:
         """Returns the configured Foundry agent."""
         return self._agent
     
-    # Stub methods for memory management
+    # Memory management methods (stubbed for now)
     async def get_memories(self, username: str) -> dict:
         """
         Get memories for a user from Foundry.
         
-        TODO: Implement actual Foundry API call:
-        - Connect to Microsoft Foundry endpoint
-        - Retrieve user-specific memories
-        - Format response according to Foundry schema
+        TODO: Implement actual Foundry memory retrieval:
+        - Query Azure AI Foundry memory store for user-specific memories
+        - Use the conversation_id or user context to filter memories
+        - Return structured memory data
+        
+        Args:
+            username: The username to retrieve memories for
+            
+        Returns:
+            Dictionary with memories, count, and source
         """
-        # Stubbed response emulating Foundry memory structure
+        # Stubbed response for now
         return {
             "memories": self._stub_memories.get(username, []),
             "count": len(self._stub_memories.get(username, [])),
-            "source": "foundry_stub"
+            "source": "foundry_stub",
+            "note": "Foundry memory retrieval not yet implemented - using stub data"
         }
     
     async def delete_user_memories(self, username: str) -> dict:
         """
         Delete all memories for a user in Foundry.
         
-        TODO: Implement actual Foundry API call:
-        - Connect to Microsoft Foundry endpoint
-        - Delete all user memories
+        TODO: Implement actual Foundry memory deletion:
+        - Connect to Azure AI Foundry memory store
+        - Delete all user-specific memories using conversation_id or user context
         - Return deletion confirmation
+        
+        Args:
+            username: The username to delete memories for
+            
+        Returns:
+            Dictionary with deletion status and message
         """
-        # Stubbed deletion
+        # Stubbed deletion for now
         if username in self._stub_memories:
             del self._stub_memories[username]
-            return {"deleted": True, "message": f"Deleted Foundry memories for {username}"}
-        return {"deleted": False, "message": "No memories found"}
+            return {
+                "deleted": True, 
+                "message": f"Deleted stub memories for {username}",
+                "note": "Foundry memory deletion not yet implemented - deleted stub data only"
+            }
+        return {
+            "deleted": False, 
+            "message": "No memories found",
+            "note": "Foundry memory deletion not yet implemented"
+        }

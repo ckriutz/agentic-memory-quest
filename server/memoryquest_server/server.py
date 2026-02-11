@@ -159,13 +159,71 @@ deepseek_clinet = AzureOpenAIChatClient(
     deployment_name=os.getenv("DEEPSEEK_DEPLOYMENT_NAME") or "gpt-5-mini",
 )
 
+# Foundry Client (Azure AI Foundry)
+# Try to create an Azure AI Foundry client if endpoint is configured
+def _create_foundry_client():
+    """
+    Create a Foundry client using Azure AI Foundry if configured.
+    
+    Required environment variables:
+    - AZURE_FOUNDRY_ENDPOINT: The Azure AI Foundry project endpoint
+      Format: https://<resource>.services.ai.azure.com/api/projects/<project>
+    
+    Optional environment variables:
+    - AZURE_FOUNDRY_API_KEY: API key for authentication (if using key-based auth)
+    - AZURE_FOUNDRY_MODEL_DEPLOYMENT: Model deployment name (defaults to GPT4_DEPLOYMENT_NAME)
+    - Or use DefaultAzureCredential for Azure AD authentication
+    
+    Falls back to GPT-4 client if Foundry is not configured.
+    """
+    foundry_endpoint = os.getenv("AZURE_FOUNDRY_ENDPOINT")
+    
+    if foundry_endpoint:
+        print(f"Initializing Azure AI Foundry client with endpoint: {foundry_endpoint}")
+        try:
+            from agent_framework.azure import AzureAIClient
+            from azure.identity.aio import DefaultAzureCredential
+            
+            # Try to use API key if provided, otherwise use DefaultAzureCredential
+            api_key = os.getenv("AZURE_FOUNDRY_API_KEY")
+            model_deployment = os.getenv("AZURE_FOUNDRY_MODEL_DEPLOYMENT") or os.getenv("GPT4_DEPLOYMENT_NAME") or "gpt-4"
+            
+            if api_key:
+                # Note: AzureAIClient may not support direct API key auth
+                # This is a placeholder - actual implementation may need adjustment
+                print("Warning: API key authentication for Foundry may require additional setup")
+                # For now, try DefaultAzureCredential
+                credential = DefaultAzureCredential()
+            else:
+                # Use Azure AD authentication (DefaultAzureCredential)
+                print("Using DefaultAzureCredential for Foundry authentication")
+                credential = DefaultAzureCredential()
+            
+            foundry_client = AzureAIClient(
+                project_endpoint=foundry_endpoint,
+                model_deployment_name=model_deployment,
+                credential=credential,
+            )
+            print("✓ Azure AI Foundry client created successfully")
+            return foundry_client
+            
+        except Exception as e:
+            print(f"Warning: Failed to create Foundry client: {e}")
+            print("Falling back to GPT-4 client for Foundry agent")
+            return gpt_4_client
+    else:
+        print("AZURE_FOUNDRY_ENDPOINT not set, using GPT-4 client for Foundry agent")
+        return gpt_4_client
+
+foundry_client = _create_foundry_client()
+
 # 2. Singleton Agents (Stateless wrappers around DB-backed memory)
 # These agents don't hold conversational state in Python memory, so we can reuse them.
 print("Initializing Persistent Agents...")
 mem0_agent = Mem0Agent(client).get_mem0_agent()
 cognee_agent = CogneeAgent(deepseek_clinet).get_cognee_agent()
 hindsight_agent = HindsightAgent(grok_client).get_hindsight_agent()
-foundry_agent_wrapper = FoundryAgent(gpt_4_client)
+foundry_agent_wrapper = FoundryAgent(foundry_client)
 foundry_agent = foundry_agent_wrapper.get_foundry_agent()
 
 # 3. Stateful Agents (Held in memory)
