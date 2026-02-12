@@ -11,6 +11,23 @@ from qdrant_client import QdrantClient
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+
+def _extract_username(messages, **kwargs):
+    """Extract username from kwargs or from the system message 'You are assisting user X'."""
+    import re
+    username = kwargs.get("username")
+    if username:
+        return username
+    msgs = [messages] if isinstance(messages, ChatMessage) else (messages or [])
+    for msg in msgs:
+        role = getattr(msg.role, "value", None) or str(msg.role)
+        if role == "system":
+            match = re.search(r"assisting user (\S+)", msg.text)
+            if match:
+                return match.group(1)
+    return None
+
+
 class Mem0Tool(ContextProvider):
     def __init__(self) -> None:
         print("Initializing Mem0 Tool")
@@ -106,7 +123,7 @@ class Mem0Tool(ContextProvider):
 
     async def invoked(self, request_messages: ChatMessage | Sequence[ChatMessage], response_messages: ChatMessage | Sequence[ChatMessage] | None = None, invoke_exception: Exception | None = None, **kwargs: Any,) -> None:
         """Stores memory. Using create_task to be non-blocking (Fire-and-Forget)."""
-        username = kwargs.get("username")
+        username = _extract_username(request_messages, **kwargs)
         if not username:
             return
 
@@ -149,7 +166,7 @@ class Mem0Tool(ContextProvider):
             logger.error(f"Mem0 background add failed: {exc}")
 
     async def invoking(self, messages: ChatMessage | MutableSequence[ChatMessage], **kwargs: Any) -> Context:
-        username = kwargs.get("username")
+        username = _extract_username(messages, **kwargs)
         if not username:
             return Context(messages=[])
 

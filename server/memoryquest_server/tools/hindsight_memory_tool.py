@@ -8,6 +8,23 @@ from hindsight_client_api import DocumentsApi
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_username(messages, **kwargs):
+    """Extract username from kwargs or from the system message 'You are assisting user X'."""
+    import re
+    username = kwargs.get("username")
+    if username:
+        return username
+    msgs = [messages] if isinstance(messages, ChatMessage) else (messages or [])
+    for msg in msgs:
+        role = getattr(msg.role, "value", None) or str(msg.role)
+        if role == "system":
+            match = re.search(r"assisting user (\S+)", msg.text)
+            if match:
+                return match.group(1)
+    return "anonymous"
+
+
 class HindsightMemoryTool(ContextProvider):
     def __init__(self) -> None:
         base_url = (os.getenv("HINDSIGHT_URL") or "http://localhost:8888").rstrip("/")
@@ -67,7 +84,7 @@ class HindsightMemoryTool(ContextProvider):
 
     async def invoked(self, request_messages: ChatMessage | Sequence[ChatMessage], response_messages: ChatMessage | Sequence[ChatMessage] | None = None, invoke_exception: Exception | None = None, **kwargs: Any,) -> None:
         print("HindsightMemoryTool invoked")
-        username = kwargs.get("username") or "anonymous"
+        username = _extract_username(request_messages, **kwargs)
         
         def _normalize_role(role: Any) -> str:
             return getattr(role, "value", None) or str(role)
@@ -101,7 +118,7 @@ class HindsightMemoryTool(ContextProvider):
 
     async def invoking(self, messages: ChatMessage | MutableSequence[ChatMessage], **kwargs: Any) -> Context:
         print("HindsightMemoryTool invoking")
-        username = kwargs.get("username") or "anonymous"
+        username = _extract_username(messages, **kwargs)
         
         # Dynamic query based on the latest user message context
         query = "General user preferences and history"
