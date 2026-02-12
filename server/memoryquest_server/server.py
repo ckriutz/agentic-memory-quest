@@ -175,19 +175,61 @@ deepseek_client = AzureOpenAIChatClient(
 # 2. Singleton Agents (Stateless wrappers around DB-backed memory)
 # These agents don't hold conversational state in Python memory, so we can reuse them.
 print("Initializing Persistent Agents...")
-mem0_agent = Mem0Agent(client).get_mem0_agent()
-cognee_agent = CogneeAgent(deepseek_client).get_cognee_agent()
-hindsight_agent = HindsightAgent(grok_client).get_hindsight_agent()
-foundry_agent_wrapper = FoundryAgent()
+
+try:
+    mem0_agent = Mem0Agent(client).get_mem0_agent()
+    print("  ✓ Mem0 agent ready")
+except Exception as e:
+    mem0_agent = None
+    print(f"  ✗ Mem0 agent failed to initialize: {e}")
+
+try:
+    cognee_agent = CogneeAgent(deepseek_client).get_cognee_agent()
+    print("  ✓ Cognee agent ready")
+except Exception as e:
+    cognee_agent = None
+    print(f"  ✗ Cognee agent failed to initialize: {e}")
+
+try:
+    hindsight_agent = HindsightAgent(grok_client).get_hindsight_agent()
+    print("  ✓ Hindsight agent ready")
+except Exception as e:
+    hindsight_agent = None
+    print(f"  ✗ Hindsight agent failed to initialize: {e}")
+
+try:
+    foundry_agent_wrapper = FoundryAgent()
+    print("  ✓ Foundry agent ready")
+except Exception as e:
+    foundry_agent_wrapper = None
+    print(f"  ✗ Foundry agent failed to initialize: {e}")
 
 # 3. Stateful Agents (Held in memory)
 # The AgentFrameworkMemoryAgent holds extracted details in python class variables, 
 # so we must maintain a dictionary of instances per user.
+# Cap the number of concurrent agent instances to prevent unbounded memory growth.
 print("Initializing Stateful Agent Registry...")
+MAX_AGENT_INSTANCES = 500
 agent_framework_instances = {} 
 agent_framework_threads = {}
 
 print("Server initialized and ready")
+
+def _ensure_agent_available(agent, name: str):
+    """Raise HTTPException if an agent failed to initialize."""
+    if agent is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{name} agent is not available. It failed to initialize at server startup."
+        )
+
+def _evict_oldest_agent_instance():
+    """Remove the oldest agent instance when the cap is reached."""
+    if len(agent_framework_instances) >= MAX_AGENT_INSTANCES:
+        oldest_user = next(iter(agent_framework_instances))
+        agent_framework_instances.pop(oldest_user, None)
+        agent_framework_threads.pop(oldest_user, None)
+        print(f"Evicted oldest agent instance for user: {oldest_user}")
 
 # --- Endpoints: Generic ---
 
@@ -210,6 +252,7 @@ async def agent_framework(request: ChatRequest):
     # Lifecycle: Load or Create Agent
     if request.username not in agent_framework_instances:
         print(f"Creating new stateful agent for: {request.username}")
+        _evict_oldest_agent_instance()
         # Note: In a production app, we would load this state from a database here
         agent_framework_instances[request.username] = AgentFrameworkMemoryAgent(client).get_agent_framework_memory_agent()
     
@@ -247,17 +290,11 @@ async def get_af_memories(request: ChatRequest):
     
     return {"message": memories}
 
-@app.delete("/agent-framework/delete/{username}")
-async def delete_af_memory(username: str):
-    print(f"Deleting Agent Framework state for: {username}")
-    agent_framework_instances.pop(username, None)
-    agent_framework_threads.pop(username, None)
-    return {"message": f"Deleted in-memory state for: {username}"}
-
 # --- Endpoints: Mem0 (Qdrant Backed) ---
 
 @app.post("/mem0")
 async def mem0(request: ChatRequest):
+    _ensure_agent_available(mem0_agent, "Mem0")
     print(f"Mem0 request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
     
@@ -269,6 +306,7 @@ async def mem0(request: ChatRequest):
 
 @app.post("/mem0/memories")
 async def mem0_get_memories(request: ChatRequest):
+    _ensure_agent_available(mem0_agent, "Mem0")
     context_provider = mem0_agent.context_provider
     memories = await context_provider.get_memories(
         request.username,
@@ -277,18 +315,11 @@ async def mem0_get_memories(request: ChatRequest):
     )
     return {"message": memories}
 
-@app.delete("/mem0/delete/{username}")
-async def delete_mem0_memory(username: str):
-    context_provider = mem0_agent.context_provider
-    result = await context_provider.delete_user_memories(username)
-    if not result.get("deleted"):
-        return {"message": "Failed to delete Mem0 memories", **result}
-    return {"message": f"Deleted Mem0 memories for: {username}", **result}
-
 # --- Endpoints: Cognee (Graph/Vector Backed) ---
 
 @app.post("/cognee")
 async def cognee(request: ChatRequest):
+    _ensure_agent_available(cognee_agent, "Cognee")
     print(f"Cognee request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
 
@@ -298,25 +329,16 @@ async def cognee(request: ChatRequest):
 
 @app.post("/cognee/memories")
 async def cognee_get_memories(request: ChatRequest):
+    _ensure_agent_available(cognee_agent, "Cognee")
     context_provider = cognee_agent.context_provider
     memories = await context_provider.get_memories(request.username)
     return {"message": memories}
-
-@app.delete("/cognee/delete/{username}")
-async def delete_cognee_memory(username: str):
-    context_provider = cognee_agent.context_provider
-    if not hasattr(context_provider, "delete_user_memories"):
-         raise HTTPException(status_code=500, detail="Cognee provider missing delete function")
-
-    result = await context_provider.delete_user_memories(username)
-    if not result.get("deleted"):
-        return {"message": "No Cognee dataset found", **result}
-    return {"message": f"Deleted Cognee memories for: {username}", **result}
 
 # --- Endpoints: Hindsight (Service Backed) ---
 
 @app.post("/hindsight")
 async def hindsight(request: ChatRequest):
+    _ensure_agent_available(hindsight_agent, "Hindsight")
     print(f"Hindsight request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
     
@@ -327,6 +349,7 @@ async def hindsight(request: ChatRequest):
 
 @app.post("/hindsight/memories")
 async def hindsight_get_memories(request: ChatRequest):
+    _ensure_agent_available(hindsight_agent, "Hindsight")
     context_provider = hindsight_agent.context_provider
     # Hindsight tool areflect returns Any (usually string or structured summary)
     memories = await context_provider.get_memories(request.username)
@@ -334,20 +357,6 @@ async def hindsight_get_memories(request: ChatRequest):
     if hasattr(memories, 'text'):
         return {"message": memories.text}
     return {"message": memories}
-
-@app.delete("/hindsight/delete/{username}")
-async def delete_hindsight_memory(username: str):
-    print(f"Deleting Hindsight memories for: {username}")
-    context_provider = hindsight_agent.context_provider
-    docs = await context_provider.delete_user_memories(username)
-    print(docs)
-    
-    if hasattr(context_provider, "delete_user_memories"):
-         await context_provider.delete_user_memories(username)
-         return {"message": f"Deleted Hindsight memories for: {username}"}
-    else:
-         # Fallback if the specific implementation hasn't been added to the Agent yet
-        return {"message": "Delete operation not supported by Hindsight provider yet."}
 
 # --- Endpoints: Foundry (Memory Store backed) ---
 
@@ -365,7 +374,7 @@ async def foundry(request: ChatRequest):
     print(f"Foundry request: {request.username}")
 
     # If Foundry is configured, reference the existing Foundry portal agent.
-    if foundry_agent_wrapper.is_configured:
+    if foundry_agent_wrapper and foundry_agent_wrapper.is_configured:
         try:
             openai_input = _create_openai_input(request.username, request.messages)
             result = await foundry_agent_wrapper.chat(input_messages=openai_input, username=request.username)
@@ -397,13 +406,6 @@ async def foundry_get_memories(request: ChatRequest):
     user.  The agent's Memory Store automatically injects stored facts
     into the context, so the response reflects what the store contains.
     """
+    _ensure_agent_available(foundry_agent_wrapper, "Foundry")
     memories = await foundry_agent_wrapper.get_memories(request.username)
     return {"message": memories}
-
-
-@app.delete("/foundry/delete/{username}")
-async def delete_foundry_memory(username: str):
-    """Clear the Foundry conversation chain for a user."""
-    print(f"Deleting Foundry conversation chain for: {username}")
-    result = await foundry_agent_wrapper.delete_user_memories(username)
-    return {"message": result.get("message", "Done"), **result}

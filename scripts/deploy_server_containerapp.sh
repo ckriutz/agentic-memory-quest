@@ -66,7 +66,7 @@ if ! az containerapp show -g "$AZ_RESOURCE_GROUP" -n "$ACA_SERVER_APP" >/dev/nul
     --image "$SERVER_IMAGE" \
     --ingress external \
     --target-port 8000 \
-    --min-replicas 0 \
+    --min-replicas 1 \
     --max-replicas 1 \
     --cpu 2.0 \
     --memory 4Gi \
@@ -78,7 +78,9 @@ else
     -n "$ACA_SERVER_APP" \
     --image "$SERVER_IMAGE" \
     --cpu 2.0 \
-    --memory 4Gi
+    --memory 4Gi \
+    --min-replicas 1 \
+    --max-replicas 1
 fi
 
 # Set all environment variables from .env file

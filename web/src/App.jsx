@@ -29,9 +29,7 @@ function App() {
     memories,
     setMemories,
     isMemoriesLoading,
-    isDeletingMemories,
     fetchMemories,
-    deleteMemories,
   } = useMemories({ username: name, getEndpoint })
 
   // This isn't important yet, but later we can use it for session management.
@@ -66,8 +64,6 @@ function App() {
     setInput('')
     setIsLoading(false)
   }
-
-  const handleDeleteMemories = deleteMemories
 
   // This is the function that sends user messages to the agent and processes responses.
   const sendMessage = async () => {
@@ -104,7 +100,7 @@ function App() {
         signal: controller.signal,
         body: JSON.stringify({
           username: name.toLowerCase(),
-          messages: updatedMessages.filter(m => m.role !== 'activity')  // Only send chat messages
+          messages: updatedMessages.filter(m => m.role !== 'activity' && m.role !== 'error')  // Only send chat messages
         })
       })
 
@@ -134,6 +130,7 @@ function App() {
         return
       }
       console.error('Agent error:', error)
+      setMessages(prev => [...prev, { role: 'error', content: `Something went wrong: ${error.message}` }])
     } finally {
       setIsLoading(false)
       if (inFlightControllerRef.current === controller) {
@@ -156,8 +153,6 @@ function App() {
         onClearChat={handleClearChat}
         memories={memories}
         memoryFramework={memoryFramework}
-        onDeleteMemories={handleDeleteMemories}
-        deleteMemoriesDisabled={!name || isDeletingMemories}
         isMemoriesLoading={isMemoriesLoading}
       />
       <ChatInterface
@@ -175,7 +170,7 @@ function App() {
 }
 
 // Main content area that shows login, welcome, or activity component
-function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, onDeleteMemories, deleteMemoriesDisabled, isMemoriesLoading }) {
+function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, isMemoriesLoading }) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto" style={{ backgroundImage: 'url(/images/resort_image.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
       {!name ? (
@@ -195,8 +190,6 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
             <MemoriesCard
               memories={memories}
               memoryFramework={memoryFramework}
-              onDeleteMemories={onDeleteMemories}
-              deleteMemoriesDisabled={deleteMemoriesDisabled}
               isLoading={isMemoriesLoading}
             />
           </div>
@@ -209,7 +202,8 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
 
 function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoading, name, memoryFramework, onMemoryFrameworkChange }) {
   // Only show text messages in chat (not activities)
-  const chatMessages = messages.filter(msg => msg.role !== 'activity')
+  const chatMessages = messages.filter(msg => msg.role !== 'activity' && msg.role !== 'error')
+  const errorMessages = messages.filter(msg => msg.role === 'error')
   const messagesEndRef = useRef(null)
 
   useEffect(() => {
@@ -235,7 +229,7 @@ function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoadin
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {chatMessages.map((msg, i) => (
+        {messages.filter(msg => msg.role !== 'activity').map((msg, i) => (
           <MessageBubble key={i} message={msg} />
         ))}
         {isLoading && (
@@ -265,6 +259,16 @@ function ChatInterface({ messages, input, onInputChange, onSendMessage, isLoadin
 
 function MessageBubble({ message }) {
   const isUser = message.role === 'user'
+  const isError = message.role === 'error'
+
+  if (isError) {
+    return (
+      <div className="p-3 rounded bg-red-50 border border-red-200 mr-8">
+        <div className="font-semibold text-sm mb-1 text-red-600">Error</div>
+        <div className="text-red-700 text-sm">{message.content}</div>
+      </div>
+    )
+  }
 
   return (
     <div className={`p-3 rounded ${isUser ? 'bg-blue-100 ml-8' : 'bg-gray-100 mr-8'}`}>
@@ -284,7 +288,7 @@ function ChatInput({ value, onChange, onSend, disabled }) {
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && !disabled && onSend()}
+          onKeyDown={(e) => e.key === 'Enter' && !disabled && onSend()}
           placeholder="Message the agent..."
           className="flex-1 p-2 border rounded disabled:bg-gray-100 disabled:cursor-not-allowed"
           disabled={disabled}

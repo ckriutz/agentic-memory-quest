@@ -1,6 +1,7 @@
 const frameworkNames = {
   'none': '',
   'agent-framework': 'Agent Framework',
+  'foundry': 'Foundry',
   'mem0': 'Mem0',
   'hindsight': 'Hindsight',
   'cognee': 'Cognee',
@@ -10,7 +11,7 @@ function Skeleton({ className = '' }) {
   return <div className={`animate-pulse rounded-md bg-gray-200/80 ${className}`} />
 }
 
-export function MemoriesCard({ memories, memoryFramework, onDeleteMemories: _onDeleteMemories, deleteMemoriesDisabled: _deleteMemoriesDisabled, isLoading = false }) {
+export function MemoriesCard({ memories, memoryFramework, isLoading = false }) {
 
   const frameworkLabel = frameworkNames[memoryFramework] || ''
   const title = frameworkLabel ? `${frameworkLabel} Memories` : 'Memories'
@@ -89,15 +90,6 @@ export function MemoriesCard({ memories, memoryFramework, onDeleteMemories: _onD
           </pre>
         )}
       </div>
-      {/*<div className="mt-6 pt-4 border-t">
-        <button
-          onClick={onDeleteMemories}
-          disabled={deleteMemoriesDisabled}
-          className="px-3 py-2 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-        >
-          Delete Memories
-        </button>
-      </div>*/}
     </div>
   )
 }

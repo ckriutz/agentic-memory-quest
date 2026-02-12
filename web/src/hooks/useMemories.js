@@ -3,7 +3,6 @@ import { useCallback, useState } from 'react'
 export function useMemories({ username, getEndpoint }) {
   const [memories, setMemories] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
 
   const fetchMemories = useCallback(
     async (messages) => {
@@ -38,40 +37,10 @@ export function useMemories({ username, getEndpoint }) {
     [username, getEndpoint]
   )
 
-  const deleteMemories = useCallback(async () => {
-    if (!username || isDeleting) return
-    setIsDeleting(true)
-
-    try {
-      const endpoint = getEndpoint()
-      const deleteEndpoint = `${endpoint}/delete/${username.toLowerCase()}`
-
-      const response = await fetch(deleteEndpoint, { method: 'DELETE' })
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      let deleteData = null
-      try {
-        deleteData = await response.json()
-      } catch {
-        deleteData = { message: 'Memories deleted.' }
-      }
-
-      setMemories(deleteData)
-    } catch (error) {
-      console.error('Error deleting memories:', error)
-    } finally {
-      setIsDeleting(false)
-    }
-  }, [username, getEndpoint, isDeleting])
-
   return {
     memories,
     setMemories,
     isMemoriesLoading: isLoading,
-    isDeletingMemories: isDeleting,
     fetchMemories,
-    deleteMemories,
   }
 }
