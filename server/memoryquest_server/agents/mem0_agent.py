@@ -44,7 +44,7 @@ class Mem0Agent:
         self._agent = ChatAgent(
             chat_client=client,
             instructions=INSTRUCTIONS,
-            context_provider=memoryprovider,
+            context_providers=memoryprovider,
             name="agent-framework-memory-agent"
         )
         print("Mem0 Agent created successfully")

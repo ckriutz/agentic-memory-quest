@@ -15,6 +15,22 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _extract_username(messages, **kwargs):
+    """Extract username from kwargs or from the system message 'You are assisting user X'."""
+    username = kwargs.get("username")
+    if username:
+        return username
+    import re
+    msgs = [messages] if isinstance(messages, ChatMessage) else (messages or [])
+    for msg in msgs:
+        role = getattr(msg.role, "value", None) or str(msg.role)
+        if role == "system":
+            match = re.search(r"assisting user (\S+)", msg.text)
+            if match:
+                return match.group(1)
+    return "anonymous"
+
+
 class CustomQDrantAdapter(QDrantAdapter):
     """Custom QDrant adapter that properly handles HTTPS URLs.
     
@@ -68,7 +84,7 @@ class CogneeMemoryTool(ContextProvider):
     async def invoking(self, messages: ChatMessage | MutableSequence[ChatMessage], **kwargs: Any) -> Context:
         """Called before the agent processes messages - injects relevant memories."""
         await self.ensure_setup()
-        username = kwargs.get("username") or "anonymous"
+        username = _extract_username(messages, **kwargs)
         dataset_name = self._dataset_name_for_user(username)
 
         # Dynamic retrieval: Use the user's last message as the query
@@ -120,7 +136,7 @@ class CogneeMemoryTool(ContextProvider):
         **kwargs: Any,
     ) -> None:
         """Called after processing. Stores conversation in background to improve performance."""
-        username = kwargs.get("username") or "anonymous"
+        username = _extract_username(request_messages, **kwargs)
 
         # Extract only user messages to avoid storing assistant output as user facts
         content_lines: list[str] = []

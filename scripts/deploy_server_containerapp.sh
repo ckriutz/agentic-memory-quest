@@ -32,7 +32,7 @@ AZ_LOCATION="westus3"
 AZ_RESOURCE_GROUP="rg-memquest"
 AZ_CONTAINERAPPS_ENV="memquest-env"
 ACA_SERVER_APP="memquest-server"
-SERVER_IMAGE="ghcr.io/ckriutz/memquest-server:10"
+SERVER_IMAGE="ghcr.io/ckriutz/memquest-server:12"
 
 # Set subscription
 say "Setting subscription to $AZ_SUBSCRIPTION_ID"
@@ -81,6 +81,12 @@ else
     --memory 4Gi \
     --min-replicas 1 \
     --max-replicas 1
+
+  # Ensure system-assigned managed identity is enabled
+  az containerapp identity assign \
+    -g "$AZ_RESOURCE_GROUP" \
+    -n "$ACA_SERVER_APP" \
+    --system-assigned >/dev/null 2>&1 || true
 fi
 
 # Set all environment variables from .env file

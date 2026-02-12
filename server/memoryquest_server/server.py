@@ -34,9 +34,10 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: drain Cognee background tasks to avoid unclosed sessions
     try:
-        cognee_ctx = cognee_agent.context_provider
-        if hasattr(cognee_ctx, "shutdown"):
-            await cognee_ctx.shutdown()
+        if cognee_agent is not None:
+            cognee_ctx = _unwrap_context_provider(cognee_agent)
+            if hasattr(cognee_ctx, "shutdown"):
+                await cognee_ctx.shutdown()
     except Exception:
         pass
 
@@ -199,7 +200,10 @@ except Exception as e:
 
 try:
     foundry_agent_wrapper = FoundryAgent()
-    print("  ✓ Foundry agent ready")
+    if foundry_agent_wrapper.is_configured:
+        print("  ✓ Foundry agent ready")
+    else:
+        print(f"  ⚠ Foundry agent not configured: {foundry_agent_wrapper._init_error or 'missing env vars'}")
 except Exception as e:
     foundry_agent_wrapper = None
     print(f"  ✗ Foundry agent failed to initialize: {e}")
@@ -230,6 +234,13 @@ def _evict_oldest_agent_instance():
         agent_framework_instances.pop(oldest_user, None)
         agent_framework_threads.pop(oldest_user, None)
         print(f"Evicted oldest agent instance for user: {oldest_user}")
+
+def _unwrap_context_provider(agent):
+    """Get the actual context provider, unwrapping AggregateContextProvider if needed."""
+    cp = agent.context_provider
+    if hasattr(cp, 'providers') and cp.providers:
+        return cp.providers[0]
+    return cp
 
 # --- Endpoints: Generic ---
 
@@ -276,12 +287,12 @@ async def get_af_memories(request: ChatRequest):
         return {"message": "No memories found (Agent not active in memory)"}
     
     agent = agent_framework_instances[request.username]
-    context_provider = agent.context_provider
-    
+    actual_provider = _unwrap_context_provider(agent)
+
     # Access internal state of the specific tool implementation
     memories = "No memories stored"
-    if context_provider and hasattr(context_provider, '_user_info'):
-        user_info = context_provider._user_info
+    if actual_provider and hasattr(actual_provider, '_user_info'):
+        user_info = actual_provider._user_info
         memories = {
             "username": user_info.username,
             "spa_preferences": user_info.spa_preferences,
@@ -307,7 +318,7 @@ async def mem0(request: ChatRequest):
 @app.post("/mem0/memories")
 async def mem0_get_memories(request: ChatRequest):
     _ensure_agent_available(mem0_agent, "Mem0")
-    context_provider = mem0_agent.context_provider
+    context_provider = _unwrap_context_provider(mem0_agent)
     memories = await context_provider.get_memories(
         request.username,
         query=request.query,
@@ -330,7 +341,7 @@ async def cognee(request: ChatRequest):
 @app.post("/cognee/memories")
 async def cognee_get_memories(request: ChatRequest):
     _ensure_agent_available(cognee_agent, "Cognee")
-    context_provider = cognee_agent.context_provider
+    context_provider = _unwrap_context_provider(cognee_agent)
     memories = await context_provider.get_memories(request.username)
     return {"message": memories}
 
@@ -350,7 +361,7 @@ async def hindsight(request: ChatRequest):
 @app.post("/hindsight/memories")
 async def hindsight_get_memories(request: ChatRequest):
     _ensure_agent_available(hindsight_agent, "Hindsight")
-    context_provider = hindsight_agent.context_provider
+    context_provider = _unwrap_context_provider(hindsight_agent)
     # Hindsight tool areflect returns Any (usually string or structured summary)
     memories = await context_provider.get_memories(request.username)
     # Handle the fact that areflect returns a wrapper or simple string

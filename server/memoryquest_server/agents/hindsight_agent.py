@@ -44,7 +44,7 @@ class HindsightAgent:
         self._agent = ChatAgent(
             chat_client=client,
             instructions=INSTRUCTIONS,
-            context_provider=self.memory_tool,
+            context_providers=self.memory_tool,
             name="hindsight-agent"
         )
         print("Hindsight Agent created successfully")

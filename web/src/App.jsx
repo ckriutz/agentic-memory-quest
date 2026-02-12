@@ -154,6 +154,7 @@ function App() {
         memories={memories}
         memoryFramework={memoryFramework}
         isMemoriesLoading={isMemoriesLoading}
+        onRefreshMemories={() => fetchMemories(messages)}
       />
       <ChatInterface
         messages={messages}
@@ -170,7 +171,7 @@ function App() {
 }
 
 // Main content area that shows login, welcome, or activity component
-function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, isMemoriesLoading }) {
+function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, memoryFramework, isMemoriesLoading, onRefreshMemories }) {
   return (
     <div className="flex-1 flex flex-col overflow-y-auto" style={{ backgroundImage: 'url(/images/resort_image.png)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
       {!name ? (
@@ -191,6 +192,7 @@ function MainContent({ name, onLogin, onLogout, usage, onClearChat, memories, me
               memories={memories}
               memoryFramework={memoryFramework}
               isLoading={isMemoriesLoading}
+              onRefresh={onRefreshMemories}
             />
           </div>
           <div className="mt-6"></div>

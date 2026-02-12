@@ -141,9 +141,9 @@ class FoundryAgent:
     ``responses.create`` scopes the memory store *per user* so each
     person gets their own personalised experience.
 
-    We also maintain a lightweight ``previous_response_id`` mapping so
-    multi-turn conversations within the same session are chained
-    server-side.
+    We also maintain a per-user ``conversation`` mapping so
+    multi-turn conversations within the same session are tracked
+    server-side and the Memory Store can persist/retrieve memories.
     """
 
     def __init__(
@@ -154,8 +154,8 @@ class FoundryAgent:
         credential: Any = None,
         project_client: Any = None,
     ) -> None:
-        # Track the most-recent response id per user for conversation chaining.
-        self._user_response_ids: dict[str, str] = {}
+        # Track per-user conversation IDs for memory continuity.
+        self._user_conversations: dict[str, str] = {}
 
         self.endpoint = (endpoint or _build_foundry_endpoint() or "").rstrip("/")
         self.agent_name = agent_name or _first_env("AZURE_FOUNDRY_AGENT_NAME")
@@ -171,10 +171,16 @@ class FoundryAgent:
             elif self.endpoint and self.agent_name:
                 # Lazy-import so a missing prerelease dependency doesn't break non-Foundry usage.
                 from azure.ai.projects import AIProjectClient
-                from azure.identity import DefaultAzureCredential
+                from azure.identity import DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential
 
                 if credential is None:
-                    credential = DefaultAzureCredential()
+                    # In Azure Container Apps, ManagedIdentityCredential is the
+                    # fastest path. DefaultAzureCredential's chain tries many
+                    # providers and can time out before reaching it.
+                    credential = ChainedTokenCredential(
+                        ManagedIdentityCredential(),
+                        DefaultAzureCredential(),
+                    )
 
                 self._project_client = AIProjectClient(endpoint=self.endpoint, credential=credential)
 
@@ -258,8 +264,18 @@ class FoundryAgent:
         assert openai_client is not None
         assert agent is not None
 
-        # Look up the previous response id for this user to chain conversation.
-        previous_response_id = self._user_response_ids.get(username) if username else None
+        # Get or create a conversation for this user so the Memory Store
+        # can persist and retrieve memories across turns.
+        # Note: conversation and previous_response_id are mutually exclusive
+        # in the Foundry API, so we use conversation (which tracks history
+        # and enables the memory lifecycle).
+        conversation_id = self._user_conversations.get(username) if username else None
+        if username and conversation_id is None:
+            def _create_conv() -> str:
+                conv = openai_client.conversations.create()
+                return conv.id
+            conversation_id = await anyio.to_thread.run_sync(_create_conv)
+            self._user_conversations[username] = conversation_id
 
         def _do_call() -> Any:
             kwargs: dict[str, Any] = {
@@ -267,23 +283,17 @@ class FoundryAgent:
                 "extra_body": {"agent": {"name": agent.name, "type": "agent_reference"}},
             }
 
+            # Attach to a conversation so the Memory Store can read/write memories.
+            if conversation_id:
+                kwargs["conversation"] = conversation_id
+
             # Scope the Memory Store to this specific user.
             if username:
                 kwargs["user"] = username
 
-            # Chain onto the previous response so the agent sees conversation
-            # history (and the Memory Store can reference prior turns).
-            if previous_response_id:
-                kwargs["previous_response_id"] = previous_response_id
-
             return openai_client.responses.create(**kwargs)
 
         response = await anyio.to_thread.run_sync(_do_call)
-
-        # Persist the response id so subsequent calls are chained.
-        response_id = getattr(response, "id", None)
-        if username and response_id:
-            self._user_response_ids[username] = response_id
 
         # Common helper field on the response object
         text = getattr(response, "output_text", None)
@@ -335,9 +345,19 @@ class FoundryAgent:
                 }
             ]
 
+            # Use the user's existing conversation so the Memory Store can
+            # look up memories scoped to that user, or create a temporary one.
+            conversation_id = self._user_conversations.get(username)
+            if conversation_id is None:
+                def _create_conv() -> str:
+                    conv = openai_client.conversations.create()
+                    return conv.id
+                conversation_id = await anyio.to_thread.run_sync(_create_conv)
+
             def _do_recall() -> Any:
                 return openai_client.responses.create(
                     input=recall_input,
+                    conversation=conversation_id,
                     user=username,
                     extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
                     # No previous_response_id — intentionally stateless so we
@@ -400,11 +420,11 @@ class FoundryAgent:
         server-side until cleared via the Foundry portal.
         """
 
-        had_chain = username in self._user_response_ids
-        self._user_response_ids.pop(username, None)
+        had_conversation = username in self._user_conversations
+        self._user_conversations.pop(username, None)
 
         return {
-            "deleted": had_chain,
+            "deleted": had_conversation,
             "message": (
                 f"Cleared conversation chain for {username}. "
                 "Server-side Memory Store entries can be managed in the Foundry portal."

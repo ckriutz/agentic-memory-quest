@@ -40,7 +40,7 @@ class CogneeAgent:
         self._agent = ChatAgent(
             chat_client=client,
             instructions=INSTRUCTIONS,
-            context_provider=memoryprovider,
+            context_providers=memoryprovider,
             name="cognee-agent"
         )
         print("Cognee Agent created successfully")
