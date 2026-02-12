@@ -8,3 +8,4 @@ cognee
 cognee-community-vector-adapter-qdrant
 hindsight-client
 azure-identity
+azure-ai-projects>=2.0.0b1

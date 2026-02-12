@@ -16,13 +16,13 @@ The Foundry agent provides integration with Microsoft Azure AI Foundry, Microsof
    - Implements stubbed memory management methods
 
 2. **API Endpoints** (`server/memoryquest_server/server.py`)
-   - `POST /agent/foundry` - Chat with Foundry agent
-   - `POST /agent/foundry/memories` - Retrieve user memories
-   - `DELETE /agent/foundry/delete/{username}` - Delete user memories
+   - `POST /foundry` - Chat with Foundry agent
+   - `POST /foundry/memories` - Retrieve user memories
 
 3. **Client Initialization**
-   - Uses `AzureAIClient` from `agent-framework-azure-ai`
-   - Configured with Azure AD authentication
+   - Uses `AIProjectClient` from `azure-ai-projects` (Foundry portal pattern)
+   - References an existing agent created in the Foundry portal (no runtime creation)
+   - Auth via Azure AD (`DefaultAzureCredential`)
    - Graceful fallback to GPT-4 client if not configured
 
 ### Frontend Components
@@ -71,13 +71,25 @@ The identity used for authentication must have one of these roles on the Azure A
 # Azure AI Foundry project endpoint
 # Format: https://<resource-name>.services.ai.azure.com/api/projects/<project-name>
 AZURE_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com/api/projects/your-project
+
+# Agent name as defined in the Foundry portal
+AZURE_FOUNDRY_AGENT_NAME=your-foundry-agent-name
 ```
 
-#### Optional
+#### Optional (endpoint construction)
+
+Instead of `AZURE_FOUNDRY_ENDPOINT`, you can build it from parts:
 
 ```bash
-# Model deployment name (defaults to GPT4_DEPLOYMENT_NAME if not set)
-AZURE_FOUNDRY_MODEL_DEPLOYMENT=gpt-4
+AZURE_FOUNDRY_RESOURCE_NAME=your-resource
+AZURE_FOUNDRY_PROJECT=your-project
+```
+
+Or set the base resource endpoint directly:
+
+```bash
+AZURE_FOUNDRY_RESOURCE_ENDPOINT=https://your-resource.services.ai.azure.com
+AZURE_FOUNDRY_PROJECT=your-project
 ```
 
 #### For Service Principal Authentication
@@ -100,6 +112,9 @@ az login
 # Set the Foundry endpoint
 export AZURE_FOUNDRY_ENDPOINT="https://your-resource.services.ai.azure.com/api/projects/your-project"
 
+# Set the Foundry agent name
+export AZURE_FOUNDRY_AGENT_NAME="your-foundry-agent-name"
+
 # Run the server
 cd server/memoryquest_server
 python3 -m uvicorn server:app --reload
@@ -116,6 +131,9 @@ export AZURE_CLIENT_SECRET="your-secret-value"
 # Set the Foundry endpoint
 export AZURE_FOUNDRY_ENDPOINT="https://your-resource.services.ai.azure.com/api/projects/your-project"
 
+# Set the Foundry agent name
+export AZURE_FOUNDRY_AGENT_NAME="your-foundry-agent-name"
+
 # Run the server
 cd server/memoryquest_server
 python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
@@ -127,12 +145,12 @@ When deployed to Azure App Service with Managed Identity enabled:
 
 1. Enable System-assigned or User-assigned Managed Identity in App Service
 2. Assign Azure AI Developer or Azure AI User role to the Managed Identity
-3. Set only the AZURE_FOUNDRY_ENDPOINT environment variable
+3. Set `AZURE_FOUNDRY_ENDPOINT` and `AZURE_FOUNDRY_AGENT_NAME` environment variables
 4. The app will automatically use Managed Identity for authentication
 
 ```bash
-# Only this environment variable is needed
 AZURE_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com/api/projects/your-project
+AZURE_FOUNDRY_AGENT_NAME=your-foundry-agent-name
 ```
 
 ## Fallback Behavior
@@ -197,21 +215,20 @@ Microsoft Foundry Agent Integration Tests
 Testing Foundry agent import...
 ✓ FoundryAgent imported successfully
 
-Testing Azure AI client availability...
-✓ AzureAIClient is available
+Testing Azure AI Projects client availability...
+✓ AIProjectClient is available
 
 Testing Azure identity availability...
 ✓ DefaultAzureCredential is available
 
 Testing Foundry agent creation...
-Foundry Agent created with Azure AI Foundry client
-✓ FoundryAgent created successfully: foundry-agent
+✓ FoundryAgent is configured and ready
 
 ============================================================
 Test Results Summary
 ============================================================
 Import                         ✓ PASS
-Azure AI Client                ✓ PASS
+Azure AI Projects Client       ✓ PASS
 Azure Identity                 ✓ PASS
 Agent Creation                 ✓ PASS
 ============================================================
@@ -252,7 +269,7 @@ All tests passed!
 
 #### 4. Module Import Errors
 
-**Error**: `No module named 'agent_framework_azure_ai'`
+**Error**: `No module named 'azure.ai.projects'`
 
 **Solutions**:
 ```bash
@@ -260,12 +277,14 @@ cd server/memoryquest_server
 pip3 install -r requirements.txt
 ```
 
+If you see errors about `agent_framework.azure`, ensure `agent-framework-azure-ai` is installed (it is included in `requirements.txt`).
+
 ## Dependencies
 
 ### Python Packages
 
 - `agent-framework` - Core Agent Framework
-- `agent-framework-azure-ai` - Azure AI integration
+- `azure-ai-projects` - Azure AI Foundry Projects + OpenAI client access
 - `azure-identity` - Azure AD authentication
 - `fastapi[standard]` - Web framework
 - `python-dotenv` - Environment variable management
@@ -274,7 +293,7 @@ All dependencies are listed in `server/memoryquest_server/requirements.txt`.
 
 ## API Reference
 
-### POST /agent/foundry
+### POST /foundry
 
 Send a message to the Foundry agent.
 
@@ -303,7 +322,7 @@ Send a message to the Foundry agent.
 }
 ```
 
-### POST /agent/foundry/memories
+### POST /foundry/memories
 
 Retrieve memories for a user.
 
@@ -327,21 +346,8 @@ Retrieve memories for a user.
 }
 ```
 
-### DELETE /agent/foundry/delete/{username}
 
-Delete all memories for a user.
-
-**Path Parameters**:
-- `username` - The username to delete memories for
-
-**Response**:
-```json
-{
-  "message": "Deleted stub memories for john_doe",
-  "deleted": true,
-  "note": "Foundry memory deletion not yet implemented"
-}
-```
+> Note: A delete endpoint is not currently exposed for Foundry in `server.py`.
 
 ## Security Considerations
 
