@@ -7,18 +7,18 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework import ChatMessage
 
 # Suppress harmless aiohttp deprecation warning about enable_cleanup_closed
 warnings.filterwarnings("ignore", message="enable_cleanup_closed", category=DeprecationWarning)
-
-from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework import ChatMessage
 
 # Tools & Agents
 from agents.agent_framework_memory_agent import AgentFrameworkMemoryAgent
 from agents.cognee_agent import CogneeAgent
 from agents.hindsight_agent import HindsightAgent
 from agents.mem0_agent import Mem0Agent
+from agents.foundry_agent import FoundryAgent
 
 # --- Configuration & Initialization ---
 load_dotenv()
@@ -100,6 +100,20 @@ def _create_system_context(username: str, messages: List[Message]) -> List[ChatM
         *(ChatMessage(role=m.role, text=m.content) for m in messages),
     ]
 
+
+def _create_openai_input(username: str, messages: List[Message]) -> list[dict[str, str]]:
+    """Helper to convert API models to OpenAI Responses API input format.
+
+    NOTE: The Foundry Responses API with agent references does NOT support
+    'system' role messages — the agent's instructions are configured in the
+    Foundry portal. Only 'user' and 'assistant' messages are forwarded.
+    """
+    return [
+        {"role": m.role, "content": m.content}
+        for m in messages
+        if m.role in ("user", "assistant")
+    ]
+
 # --- Health Checks ---
 
 async def check_qdrant_health():
@@ -152,7 +166,7 @@ gpt_4_client = AzureOpenAIChatClient(
     deployment_name=os.getenv("GPT4_DEPLOYMENT_NAME") or "gpt-5-mini",
 )
 
-deepseek_clinet = AzureOpenAIChatClient(
+deepseek_client = AzureOpenAIChatClient(
     api_key=_require_env("AZURE_OPENAI_API_KEY"),
     endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
     deployment_name=os.getenv("DEEPSEEK_DEPLOYMENT_NAME") or "gpt-5-mini",
@@ -162,8 +176,9 @@ deepseek_clinet = AzureOpenAIChatClient(
 # These agents don't hold conversational state in Python memory, so we can reuse them.
 print("Initializing Persistent Agents...")
 mem0_agent = Mem0Agent(client).get_mem0_agent()
-cognee_agent = CogneeAgent(deepseek_clinet).get_cognee_agent()
+cognee_agent = CogneeAgent(deepseek_client).get_cognee_agent()
 hindsight_agent = HindsightAgent(grok_client).get_hindsight_agent()
+foundry_agent_wrapper = FoundryAgent()
 
 # 3. Stateful Agents (Held in memory)
 # The AgentFrameworkMemoryAgent holds extracted details in python class variables, 
@@ -334,3 +349,61 @@ async def delete_hindsight_memory(username: str):
          # Fallback if the specific implementation hasn't been added to the Agent yet
         return {"message": "Delete operation not supported by Hindsight provider yet."}
 
+# --- Endpoints: Foundry (Memory Store backed) ---
+
+@app.post("/foundry")
+async def foundry(request: ChatRequest):
+    """
+    Microsoft Foundry agent endpoint.
+    
+    If Azure AI Foundry is configured, this *references an existing agent* created
+    in the Foundry portal (Azure AD auth via DefaultAzureCredential).
+    The agent's Memory Store is scoped per-user via the ``user`` parameter.
+    
+    If not configured, falls back to GPT-4 client.
+    """
+    print(f"Foundry request: {request.username}")
+
+    # If Foundry is configured, reference the existing Foundry portal agent.
+    if foundry_agent_wrapper.is_configured:
+        try:
+            openai_input = _create_openai_input(request.username, request.messages)
+            result = await foundry_agent_wrapper.chat(input_messages=openai_input, username=request.username)
+            usage = _normalize_usage(result.usage)
+            return {"message": result.text, "usage": usage}
+        except Exception as e:
+            # If Foundry is misconfigured or the SDK surface differs, do not hard-fail the API.
+            # Fall back to GPT-4 client but include a diagnostic note.
+            print(f"Warning: Foundry chat failed, falling back to GPT-4 client: {type(e).__name__}: {e}")
+
+    # Otherwise, fall back to the local Azure OpenAI client (useful for dev/test).
+    messages = _create_system_context(request.username, request.messages)
+    response = await gpt_4_client.get_response(messages)
+    usage = _normalize_usage(response.usage_details)
+    return {
+        "message": response.messages[0].text,
+        "usage": usage,
+        "note": (
+            "Foundry not configured or Foundry call failed; returned response from GPT-4 client instead. "
+            "Check AZURE_FOUNDRY_ENDPOINT/AZURE_FOUNDRY_AGENT_NAME, Azure AD auth, and azure-ai-projects version."
+        ),
+    }
+
+@app.post("/foundry/memories")
+async def foundry_get_memories(request: ChatRequest):
+    """Retrieve Foundry memories for a user.
+
+    Asks the Foundry agent to recall everything it remembers about the
+    user.  The agent's Memory Store automatically injects stored facts
+    into the context, so the response reflects what the store contains.
+    """
+    memories = await foundry_agent_wrapper.get_memories(request.username)
+    return {"message": memories}
+
+
+@app.delete("/foundry/delete/{username}")
+async def delete_foundry_memory(username: str):
+    """Clear the Foundry conversation chain for a user."""
+    print(f"Deleting Foundry conversation chain for: {username}")
+    result = await foundry_agent_wrapper.delete_user_memories(username)
+    return {"message": result.get("message", "Done"), **result}
