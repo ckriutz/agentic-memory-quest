@@ -1,7 +1,7 @@
-agent-framework>=1.0.0b251120 --pre
-agent-framework-azure-ai --pre
+agent-framework==1.0.0b251120 --pre
+agent-framework-azure-ai==1.0.0b251120 --pre
 fastapi[standard]
-agent-framework-mem0 --pre
+agent-framework-mem0==1.0.0b251120 --pre
 mem0ai
 python-dotenv
 cognee
