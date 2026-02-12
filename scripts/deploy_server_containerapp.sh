@@ -32,7 +32,7 @@ AZ_LOCATION="westus3"
 AZ_RESOURCE_GROUP="rg-memquest"
 AZ_CONTAINERAPPS_ENV="memquest-env"
 ACA_SERVER_APP="memquest-server"
-SERVER_IMAGE="ghcr.io/ckriutz/memquest-server:2"
+SERVER_IMAGE="ghcr.io/ckriutz/memquest-server:10"
 
 # Set subscription
 say "Setting subscription to $AZ_SUBSCRIPTION_ID"
@@ -67,13 +67,18 @@ if ! az containerapp show -g "$AZ_RESOURCE_GROUP" -n "$ACA_SERVER_APP" >/dev/nul
     --ingress external \
     --target-port 8000 \
     --min-replicas 0 \
-    --max-replicas 1
+    --max-replicas 1 \
+    --cpu 2.0 \
+    --memory 4Gi \
+    --mi-system-assigned
 else
   say "Updating existing container app"
   az containerapp update \
     -g "$AZ_RESOURCE_GROUP" \
     -n "$ACA_SERVER_APP" \
-    --image "$SERVER_IMAGE"
+    --image "$SERVER_IMAGE" \
+    --cpu 2.0 \
+    --memory 4Gi
 fi
 
 # Set all environment variables from .env file
@@ -128,11 +133,66 @@ if [[ -n "${COGNEE_DATASET_NAME:-}" ]]; then
   ENV_VARS+=("COGNEE_DATASET_NAME=${COGNEE_DATASET_NAME}")
 fi
 
+# Foundry agent env vars (only sent when non-empty)
+if [[ -n "${AZURE_FOUNDRY_ENDPOINT:-}" ]]; then
+  ENV_VARS+=("AZURE_FOUNDRY_ENDPOINT=${AZURE_FOUNDRY_ENDPOINT}")
+fi
+if [[ -n "${AZURE_FOUNDRY_AGENT_NAME:-}" ]]; then
+  ENV_VARS+=("AZURE_FOUNDRY_AGENT_NAME=${AZURE_FOUNDRY_AGENT_NAME}")
+fi
+
 az containerapp update \
   -g "$AZ_RESOURCE_GROUP" \
   -n "$ACA_SERVER_APP" \
   --set-env-vars \
   "${ENV_VARS[@]}"
+
+# Assign RBAC roles for Foundry (managed identity → AI Foundry resource)
+if [[ -n "${AZURE_FOUNDRY_ENDPOINT:-}" ]]; then
+  say "Assigning RBAC roles for Foundry agent access"
+
+  # Get the managed identity principal ID
+  PRINCIPAL_ID=$(az containerapp show \
+    -g "$AZ_RESOURCE_GROUP" \
+    -n "$ACA_SERVER_APP" \
+    --query identity.principalId -o tsv)
+
+  # Extract the Foundry resource scope from the endpoint
+  # Endpoint format: https://<resource>.services.ai.azure.com/api/projects/<project>
+  # We need the Cognitive Services resource scope
+  FOUNDRY_RESOURCE_NAME=$(echo "$AZURE_FOUNDRY_ENDPOINT" | sed -n 's|https://\([^.]*\)\.services\.ai\.azure\.com.*|\1|p')
+
+  if [[ -n "$FOUNDRY_RESOURCE_NAME" ]]; then
+    FOUNDRY_RESOURCE_ID=$(az cognitiveservices account show \
+      --name "$FOUNDRY_RESOURCE_NAME" \
+      --resource-group "$AZ_RESOURCE_GROUP" \
+      --query id -o tsv 2>/dev/null || true)
+
+    if [[ -n "$FOUNDRY_RESOURCE_ID" ]]; then
+      # Azure AI Developer — to call the agent
+      az role assignment create \
+        --assignee "$PRINCIPAL_ID" \
+        --role "Azure AI Developer" \
+        --scope "$FOUNDRY_RESOURCE_ID" \
+        2>/dev/null || say "  (Azure AI Developer role may already be assigned)"
+
+      # Cognitive Services User — for model inference
+      az role assignment create \
+        --assignee "$PRINCIPAL_ID" \
+        --role "Cognitive Services User" \
+        --scope "$FOUNDRY_RESOURCE_ID" \
+        2>/dev/null || say "  (Cognitive Services User role may already be assigned)"
+
+      say "  ✅ RBAC roles assigned for Foundry"
+    else
+      say "  ⚠️  Could not find Foundry resource '$FOUNDRY_RESOURCE_NAME' in resource group '$AZ_RESOURCE_GROUP'"
+      say "     You may need to assign roles manually if the resource is in a different RG"
+    fi
+  else
+    say "  ⚠️  Could not parse resource name from AZURE_FOUNDRY_ENDPOINT"
+    say "     Assign 'Azure AI Developer' and 'Cognitive Services User' roles manually"
+  fi
+fi
 
 # Get the URL
 SERVER_URL=$(az containerapp show \

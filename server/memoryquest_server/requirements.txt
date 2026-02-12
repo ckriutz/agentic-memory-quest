@@ -1,4 +1,4 @@
-agent-framework --pre
+agent-framework>=1.0.0b251120 --pre
 agent-framework-azure-ai --pre
 fastapi[standard]
 agent-framework-mem0 --pre

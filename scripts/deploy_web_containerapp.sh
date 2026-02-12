@@ -16,7 +16,7 @@ AZ_LOCATION="westus3"
 AZ_RESOURCE_GROUP="rg-memquest"
 AZ_CONTAINERAPPS_ENV="memquest-env"
 ACA_WEB_APP="memquest-web"
-WEB_IMAGE="ghcr.io/ckriutz/memquest-web:2"
+WEB_IMAGE="ghcr.io/ckriutz/memquest-web:7"
 
 # Get server URL for API proxy
 say "Getting server URL..."
@@ -66,14 +66,17 @@ if ! az containerapp show -g "$AZ_RESOURCE_GROUP" -n "$ACA_WEB_APP" >/dev/null 2
     --target-port 80 \
     --min-replicas 0 \
     --max-replicas 1 \
+    --cpu 1.0 \ 
+    --memory 2Gi \
     --env-vars "API_UPSTREAM=${API_UPSTREAM}"
 else
   say "Updating existing container app"
   az containerapp update \
     -g "$AZ_RESOURCE_GROUP" \
     -n "$ACA_WEB_APP" \
-    --image "$WEB_IMAGE"
-  
+    --image "$WEB_IMAGE" \
+    --cpu 1.0 \
+    --memory 2Gi
   # Update environment variables
   say "Setting environment variables"
   az containerapp update \
