@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Set
 
@@ -59,8 +60,8 @@ class DecisionResult:
     content_hash: str = ""
 
 
-# Keep an in-memory set of recent content hashes for dedup.
-_seen_hashes: Set[str] = set()
+# Keep an in-memory ordered dict of recent content hashes for dedup (LRU eviction).
+_seen_hashes: OrderedDict[str, None] = OrderedDict()
 _MAX_SEEN = 50_000
 
 
@@ -77,10 +78,10 @@ def decide(
             should_store=False, reason="duplicate", content_hash=content_hash
         )
 
-    # Track hash (bounded LRU-style eviction)
+    # Track hash (LRU eviction when at capacity)
     if len(_seen_hashes) >= _MAX_SEEN:
-        _seen_hashes.clear()
-    _seen_hashes.add(content_hash)
+        _seen_hashes.popitem(last=False)  # Remove oldest
+    _seen_hashes[content_hash] = None
 
     stripped = text.strip().lower()
 

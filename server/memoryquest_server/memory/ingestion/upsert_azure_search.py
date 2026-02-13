@@ -9,6 +9,7 @@ Failed documents are routed to a Dead Letter Queue (DLQ) callback.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -82,7 +83,6 @@ async def upsert_documents(
 
     success = 0
     failed = 0
-    import asyncio
 
     for attempt in range(max_retries):
         try:

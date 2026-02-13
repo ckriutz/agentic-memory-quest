@@ -56,6 +56,7 @@ class AzureSearchMemoryAdapter:
         self._eventhub_producer: Any | None = None
         self._init_lock = asyncio.Lock()
         self._initialized = False
+        self._last_texts: Dict[str, str] = {}
 
     # -- Lazy initialisation (connection pooling) ----------------------
 
@@ -172,9 +173,7 @@ class AzureSearchMemoryAdapter:
         """Send a MemoryEvent to Event Hubs without blocking the caller."""
         if not cfg.MEMORY_ENABLED or not cfg.COLD_INGEST_ENABLED:
             return
-        asyncio.get_event_loop().call_soon(
-            lambda: asyncio.ensure_future(self._send_to_eventhub(event))
-        )
+        asyncio.create_task(self._send_to_eventhub(event))
 
     async def _send_to_eventhub(self, event: MemoryEvent) -> None:
         try:
@@ -230,9 +229,6 @@ class AzureSearchMemoryAdapter:
         except Exception:
             logger.exception("Embedding computation failed")
             return []
-
-    # Cache for latest search results so semantic ranker can access text.
-    _last_texts: Dict[str, str] = {}
 
     async def _sparse_search(
         self, text: str, odata_filter: str | None, top: int
