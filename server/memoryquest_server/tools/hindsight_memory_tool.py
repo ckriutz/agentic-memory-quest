@@ -1,5 +1,5 @@
 from typing import Any, MutableSequence, Sequence
-import json
+import asyncio
 import os
 import logging
 from agent_framework import ChatMessage, Context, ContextProvider
@@ -7,6 +7,10 @@ from hindsight_client import Hindsight
 from hindsight_client_api import DocumentsApi
 
 logger = logging.getLogger(__name__)
+
+# Timeout for Hindsight service calls (recall/retain) to prevent hanging
+# when the service is unhealthy or unreachable.
+HINDSIGHT_TIMEOUT_SECONDS = float(os.getenv("HINDSIGHT_TIMEOUT_SECONDS", "10"))
 
 
 def _extract_username(messages, **kwargs):
@@ -89,30 +93,38 @@ class HindsightMemoryTool(ContextProvider):
         def _normalize_role(role: Any) -> str:
             return getattr(role, "value", None) or str(role)
         
-        # Simplify message extraction
-        messages: list[dict[str, str]] = []
+        # Extract plain-text content from user messages.
+        # Hindsight's retain endpoint expects natural-language text, not JSON.
+        # Sending JSON-serialized chat messages prevents proper memory extraction.
+        content_lines: list[str] = []
         
         def _add_msgs(source: ChatMessage | Sequence[ChatMessage]):
             # Only retain user-provided content.
-            # If we store assistant responses too, the assistant's own suggestions can be recalled later
-            # and treated like user facts/preferences.
             if isinstance(source, ChatMessage):
                 role = _normalize_role(source.role)
                 if role == "user":
-                    messages.append({"role": role, "content": source.text})
+                    content_lines.append(source.text)
             else:
                 for msg in source:
                     role = _normalize_role(msg.role)
                     if role == "user":
-                        messages.append({"role": role, "content": msg.text})
+                        content_lines.append(msg.text)
 
         _add_msgs(request_messages)
         # Intentionally ignore response_messages (assistant output)
 
+        content = "\n".join(content_lines)
+        if not content.strip():
+            return
+
         try:
-            content = json.dumps(messages, ensure_ascii=False)
-            response = await self.client.aretain(bank_id=username, content=content)
+            response = await asyncio.wait_for(
+                self.client.aretain(bank_id=username, content=content),
+                timeout=HINDSIGHT_TIMEOUT_SECONDS,
+            )
             print("HindsightMemoryTool retain response:", response)
+        except asyncio.TimeoutError:
+            logger.warning(f"Hindsight aretain timed out after {HINDSIGHT_TIMEOUT_SECONDS}s for user {username}")
         except Exception as e:
             logger.error(f"Failed to save context to Hindsight: {e}")
 
@@ -120,26 +132,44 @@ class HindsightMemoryTool(ContextProvider):
         print("HindsightMemoryTool invoking")
         username = _extract_username(messages, **kwargs)
         
-        # Dynamic query based on the latest user message context
-        query = "General user preferences and history"
+        # Build the recall query from the user's latest message.
+        # Meta-questions like "what do you remember about me" are poor semantic
+        # search queries for Hindsight — they match nothing in the stored facts.
+        # Always use a broad recall query that retrieves user-specific facts.
+        BROAD_QUERY = "user preferences, personal details, history, and interests"
+        query = BROAD_QUERY
+
+        user_text = ""
         if isinstance(messages, Sequence) and messages:
             for msg in reversed(messages):
                 role = getattr(msg.role, "value", None) or str(msg.role)
                 if role == "user":
-                    # Short messages like "Yes" or "Ok" produce poor vector search results;
-                    # fall back to the generic query in that case.
-                    if len(msg.text) > 5:
-                        query = msg.text
+                    user_text = msg.text
                     break
         elif isinstance(messages, ChatMessage):
             role = getattr(messages.role, "value", None) or str(messages.role)
-            if role == "user" and len(messages.text) > 5:
-                query = messages.text
+            if role == "user":
+                user_text = messages.text
+
+        # Use the user's message as the query only when it contains real content
+        # (not meta-questions about memory, and not very short messages).
+        if len(user_text) > 5:
+            meta_phrases = [
+                "remember about me", "know about me", "recall about me",
+                "what do you remember", "what do you know", "list every fact",
+                "tell me what you know", "what have you stored",
+            ]
+            is_meta = any(p in user_text.lower() for p in meta_phrases)
+            if not is_meta:
+                query = user_text
 
         try:
-            results = await self.client.arecall(
-                bank_id=username,
-                query=query,
+            results = await asyncio.wait_for(
+                self.client.arecall(
+                    bank_id=username,
+                    query=query,
+                ),
+                timeout=HINDSIGHT_TIMEOUT_SECONDS,
             )
             print(f"HindsightMemoryTool recall results for '{query}':", results)
 
@@ -151,6 +181,9 @@ class HindsightMemoryTool(ContextProvider):
                     )
                 ]
             )
+        except asyncio.TimeoutError:
+            logger.warning(f"Hindsight arecall timed out after {HINDSIGHT_TIMEOUT_SECONDS}s for user {username}")
+            return Context(messages=[])
         except Exception as e:
             logger.error(f"Failed to recall memories: {e}")
             # Return empty context so the agent can still proceed without memory
