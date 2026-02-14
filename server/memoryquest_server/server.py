@@ -1,4 +1,6 @@
 import os
+import time
+import asyncio
 import warnings
 import httpx
 from contextlib import asynccontextmanager
@@ -20,13 +22,13 @@ from agents.hindsight_agent import HindsightAgent
 from agents.mem0_agent import Mem0Agent
 from agents.foundry_agent import FoundryAgent
 
+# HOT/COLD memory layer
+from memory.adapter.azure_search_adapter import AzureSearchMemoryAdapter
+from memory.models import MemoryEvent, MemoryHit, QueryContext
+from memory import config as memory_config
+
 # --- Configuration & Initialization ---
 load_dotenv()
-
-# Fix for Qdrant connection issues with HTTPS
-if os.getenv("QDRANT_HOST", "").startswith("https://") and os.getenv("QDRANT_PORT") == "6333":
-    print("Adjusting QDRANT_PORT to 443 for HTTPS connection in server startup")
-    os.environ["QDRANT_PORT"] = "443"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,6 +40,11 @@ async def lifespan(app: FastAPI):
             cognee_ctx = _unwrap_context_provider(cognee_agent)
             if hasattr(cognee_ctx, "shutdown"):
                 await cognee_ctx.shutdown()
+    except Exception:
+        pass
+    # Shutdown: close memory adapter Event Hubs producer
+    try:
+        await memory_adapter.close()
     except Exception:
         pass
 
@@ -117,11 +124,17 @@ def _create_openai_input(username: str, messages: List[Message]) -> list[dict[st
 
 # --- Health Checks ---
 
-async def check_qdrant_health():
-    qdrant_host = os.getenv("QDRANT_HOST")
+async def check_azure_search_health():
+    endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+    api_key = os.getenv("AZURE_SEARCH_API_KEY", "")
+    if not endpoint:
+        return False
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{qdrant_host}")
+            response = await client.get(
+                f"{endpoint.rstrip('/')}/indexes?api-version=2024-07-01",
+                headers={"api-key": api_key},
+            )
             return response.status_code == 200
     except Exception:
         return False
@@ -138,11 +151,11 @@ async def check_hindsight_health():
 
 @app.get("/")
 async def read_root():
-    qdrant_healthy = await check_qdrant_health()
+    azure_search_healthy = await check_azure_search_health()
     hindsight_healthy = await check_hindsight_health()
     return {
         "Hello": "Agentic World", 
-        "Qdrant Healthy": qdrant_healthy, 
+        "Azure Search Healthy": azure_search_healthy, 
         "Hindsight Healthy": hindsight_healthy
     }
 
@@ -219,6 +232,56 @@ agent_framework_threads = {}
 
 print("Server initialized and ready")
 
+# --- Shared Memory Adapter (HOT/COLD paths) ---
+# Integrated into all agents EXCEPT the "none" generic endpoint.
+memory_adapter = AzureSearchMemoryAdapter()
+if memory_config.MEMORY_ENABLED:
+    print(f"  ✓ Memory layer enabled (hot={memory_config.HOT_RETRIEVAL_ENABLED}, cold={memory_config.COLD_INGEST_ENABLED})")
+else:
+    print("  ⚠ Memory layer disabled (MEMORY_ENABLED=false)")
+
+
+async def _memory_retrieve(username: str, agent_id: str, query_text: str, tenant_id: str = "default") -> str:
+    """HOT path: retrieve relevant memory snippets for prompt injection."""
+    if not memory_config.MEMORY_ENABLED or not memory_config.HOT_RETRIEVAL_ENABLED:
+        return ""
+    try:
+        ctx = QueryContext(
+            text=query_text,
+            user_id=username,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+        )
+        hits = await asyncio.wait_for(
+            memory_adapter.retrieve(ctx, k=memory_config.MEMORY_K),
+            timeout=10.0,
+        )
+        if not hits:
+            return ""
+        snippets = [f"- {h.text_snippet}" for h in hits if h.text_snippet]
+        return "Relevant memories from shared memory store:\n" + "\n".join(snippets)
+    except Exception:
+        return ""
+
+
+async def _memory_enqueue(username: str, agent_id: str, text: str, tenant_id: str = "default", tags: list[str] | None = None) -> None:
+    """COLD path: fire-and-forget enqueue of a memory event."""
+    if not memory_config.MEMORY_ENABLED or not memory_config.COLD_INGEST_ENABLED:
+        return
+    try:
+        content_hash = MemoryEvent.content_hash(text)
+        event = MemoryEvent(
+            id=MemoryEvent.generate_id(tenant_id, username, agent_id, time.time(), content_hash),
+            agent_id=agent_id,
+            user_id=username,
+            tenant_id=tenant_id,
+            text=text,
+            tags=tags or [],
+        )
+        await memory_adapter.enqueue_write(event)
+    except Exception:
+        pass  # Never fail the request due to memory write
+
 def _ensure_agent_available(agent, name: str):
     """Raise HTTPException if an agent failed to initialize."""
     if agent is None:
@@ -276,8 +339,18 @@ async def agent_framework(request: ChatRequest):
     thread = agent_framework_threads[request.username]
     messages = _create_system_context(request.username, request.messages)
 
+    # HOT path: inject shared memory context
+    user_query = request.messages[-1].content if request.messages else ""
+    mem_context = await _memory_retrieve(request.username, "agent-framework", user_query)
+    if mem_context:
+        messages.insert(1, ChatMessage(role="system", text=mem_context))
+
     response = await agent.run(messages, thread=thread)
     usage = _normalize_usage(response.usage_details)
+
+    # COLD path: enqueue memory event (fire-and-forget)
+    if user_query:
+        await _memory_enqueue(request.username, "agent-framework", user_query)
     
     return {"message": response.messages[0].text, "usage": usage}
 
@@ -308,10 +381,20 @@ async def mem0(request: ChatRequest):
     _ensure_agent_available(mem0_agent, "Mem0")
     print(f"Mem0 request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
+
+    # HOT path: inject shared memory context
+    user_query = request.messages[-1].content if request.messages else ""
+    mem_context = await _memory_retrieve(request.username, "mem0", user_query)
+    if mem_context:
+        messages.insert(1, ChatMessage(role="system", text=mem_context))
     
     # Mem0 handles state via Qdrant, we just pass the username
     response = await mem0_agent.run(messages, username=request.username)
     usage = _normalize_usage(response.usage_details)
+
+    # COLD path: enqueue memory event (fire-and-forget)
+    if user_query:
+        await _memory_enqueue(request.username, "mem0", user_query)
     
     return {"message": response.messages[0].text, "usage": usage}
 
@@ -334,8 +417,19 @@ async def cognee(request: ChatRequest):
     print(f"Cognee request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
 
+    # HOT path: inject shared memory context
+    user_query = request.messages[-1].content if request.messages else ""
+    mem_context = await _memory_retrieve(request.username, "cognee", user_query)
+    if mem_context:
+        messages.insert(1, ChatMessage(role="system", text=mem_context))
+
     response = await cognee_agent.run(messages, username=request.username)
     usage = _normalize_usage(response.usage_details)
+
+    # COLD path: enqueue memory event (fire-and-forget)
+    if user_query:
+        await _memory_enqueue(request.username, "cognee", user_query)
+
     return {"message": response.messages[0].text, "usage": usage}
 
 @app.post("/cognee/memories")
@@ -352,9 +446,19 @@ async def hindsight(request: ChatRequest):
     _ensure_agent_available(hindsight_agent, "Hindsight")
     print(f"Hindsight request: {request.username}")
     messages = _create_system_context(request.username, request.messages)
+
+    # HOT path: inject shared memory context
+    user_query = request.messages[-1].content if request.messages else ""
+    mem_context = await _memory_retrieve(request.username, "hindsight", user_query)
+    if mem_context:
+        messages.insert(1, ChatMessage(role="system", text=mem_context))
     
     response = await hindsight_agent.run(messages, username=request.username)
     usage = _normalize_usage(response.usage_details)
+
+    # COLD path: enqueue memory event (fire-and-forget)
+    if user_query:
+        await _memory_enqueue(request.username, "hindsight", user_query)
     
     return {"message": response.messages[0].text, "usage": usage}
 
@@ -384,12 +488,24 @@ async def foundry(request: ChatRequest):
     """
     print(f"Foundry request: {request.username}")
 
+    # HOT path: inject shared memory context
+    user_query = request.messages[-1].content if request.messages else ""
+    mem_context = await _memory_retrieve(request.username, "foundry", user_query)
+
     # If Foundry is configured, reference the existing Foundry portal agent.
     if foundry_agent_wrapper and foundry_agent_wrapper.is_configured:
         try:
             openai_input = _create_openai_input(request.username, request.messages)
+            # Prepend shared memory context as a user-role preamble.
+            if mem_context:
+                openai_input.insert(0, {"role": "user", "content": f"[Memory context]: {mem_context}"})
             result = await foundry_agent_wrapper.chat(input_messages=openai_input, username=request.username)
             usage = _normalize_usage(result.usage)
+
+            # COLD path: enqueue memory event (fire-and-forget)
+            if user_query:
+                await _memory_enqueue(request.username, "foundry", user_query)
+
             return {"message": result.text, "usage": usage}
         except Exception as e:
             # If Foundry is misconfigured or the SDK surface differs, do not hard-fail the API.
@@ -398,8 +514,15 @@ async def foundry(request: ChatRequest):
 
     # Otherwise, fall back to the local Azure OpenAI client (useful for dev/test).
     messages = _create_system_context(request.username, request.messages)
+    if mem_context:
+        messages.insert(1, ChatMessage(role="system", text=mem_context))
     response = await gpt_4_client.get_response(messages)
     usage = _normalize_usage(response.usage_details)
+
+    # COLD path: enqueue memory event (fire-and-forget)
+    if user_query:
+        await _memory_enqueue(request.username, "foundry", user_query)
+
     return {
         "message": response.messages[0].text,
         "usage": usage,

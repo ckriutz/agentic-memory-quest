@@ -15,8 +15,7 @@ COPY requirements.txt .
 
 # Install Python dependencies
 # --pre is required because azure-ai-projects>=2.0.0b1 is a prerelease
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --pre -r requirements.txt
+RUN pip install --pre -r requirements.txt
 
 # Copy application code
 COPY . .
