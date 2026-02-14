@@ -1,6 +1,5 @@
 from typing import Any, MutableSequence, Sequence
 import asyncio
-import json
 import os
 import logging
 from agent_framework import ChatMessage, Context, ContextProvider
@@ -94,28 +93,31 @@ class HindsightMemoryTool(ContextProvider):
         def _normalize_role(role: Any) -> str:
             return getattr(role, "value", None) or str(role)
         
-        # Simplify message extraction
-        messages: list[dict[str, str]] = []
+        # Extract plain-text content from user messages.
+        # Hindsight's retain endpoint expects natural-language text, not JSON.
+        # Sending JSON-serialized chat messages prevents proper memory extraction.
+        content_lines: list[str] = []
         
         def _add_msgs(source: ChatMessage | Sequence[ChatMessage]):
             # Only retain user-provided content.
-            # If we store assistant responses too, the assistant's own suggestions can be recalled later
-            # and treated like user facts/preferences.
             if isinstance(source, ChatMessage):
                 role = _normalize_role(source.role)
                 if role == "user":
-                    messages.append({"role": role, "content": source.text})
+                    content_lines.append(source.text)
             else:
                 for msg in source:
                     role = _normalize_role(msg.role)
                     if role == "user":
-                        messages.append({"role": role, "content": msg.text})
+                        content_lines.append(msg.text)
 
         _add_msgs(request_messages)
         # Intentionally ignore response_messages (assistant output)
 
+        content = "\n".join(content_lines)
+        if not content.strip():
+            return
+
         try:
-            content = json.dumps(messages, ensure_ascii=False)
             response = await asyncio.wait_for(
                 self.client.aretain(bank_id=username, content=content),
                 timeout=HINDSIGHT_TIMEOUT_SECONDS,
