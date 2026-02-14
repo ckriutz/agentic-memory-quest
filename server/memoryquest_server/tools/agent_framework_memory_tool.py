@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Any
 from agent_framework.azure import AzureOpenAIChatClient
 from collections.abc import MutableSequence, Sequence
-from agent_framework import ContextProvider, Context, ChatClientProtocol, ChatMessage, ChatOptions
+from agent_framework import ContextProvider, Context, ChatClientProtocol, ChatMessage
 import json
 import re
 
@@ -91,7 +91,7 @@ class ClientDetailsMemoryTool(ContextProvider):
         try:
             extraction_message = ChatMessage(role="user", text=extraction_prompt)
             
-            result = await self._extraction_client.get_response(messages=[extraction_message], chat_options=ChatOptions(response_format=ClientDetailsModels))
+            result = await self._extraction_client.get_response(messages=[extraction_message], options={"response_format": ClientDetailsModels})
 
             # Extract user info using the helper (handles both structured output and JSON parsing)
             extracted_info = self._extract_user_info(result)

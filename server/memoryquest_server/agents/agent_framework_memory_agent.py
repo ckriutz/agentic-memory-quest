@@ -43,7 +43,7 @@ class AgentFrameworkMemoryAgent:
         self._agent = ChatAgent(
             chat_client=client,
             instructions=INSTRUCTIONS,
-            context_providers=memory_provider,
+            context_provider=memory_provider,
             name="agent-framework-memory-agent"
         )
         print("Agent Framework Memory Agent created successfully")
