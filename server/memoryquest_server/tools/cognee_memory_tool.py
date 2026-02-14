@@ -3,13 +3,13 @@ import asyncio
 import logging
 import cognee
 from typing import Any, MutableSequence, Sequence
-from cognee_community_vector_adapter_qdrant import register
-from cognee_community_vector_adapter_qdrant.qdrant_adapter import QDrantAdapter
-from qdrant_client import AsyncQdrantClient
+from cognee.infrastructure.databases.vector import use_vector_adapter
 from cognee.modules.data.exceptions.exceptions import DatasetNotFoundError
 from cognee.exceptions import CogneeApiError
 from agent_framework import ChatMessage, Context, ContextProvider
 from dotenv import load_dotenv
+
+from tools.cognee_azure_search_adapter import CogneeAzureSearchAdapter
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -33,28 +33,6 @@ def _extract_username(messages, **kwargs):
             if match:
                 return match.group(1)
     return "anonymous"
-
-
-class CustomQDrantAdapter(QDrantAdapter):
-    """Custom QDrant adapter that properly handles HTTPS URLs.
-    
-    The default QDrantAdapter passes port=6333 even for HTTPS URLs, which causes
-    connection issues. For HTTPS URLs, we must explicitly set port=443.
-    """
-    
-    def get_qdrant_client(self) -> AsyncQdrantClient:
-        if hasattr(self, 'qdrant_path') and self.qdrant_path is not None:
-            return AsyncQdrantClient(path=self.qdrant_path)
-        elif self.url is not None:
-            url = self.url
-            if url.startswith("https://"):
-                import re
-                url = re.sub(r':\d+/?$', '', url)
-                url = url.rstrip('/')
-                return AsyncQdrantClient(url=url, api_key=self.api_key, port=443)
-            else:
-                return AsyncQdrantClient(url=url, api_key=self.api_key, port=6333)
-        return AsyncQdrantClient(location=":memory:")
 
 
 class CogneeMemoryTool(ContextProvider):
@@ -302,9 +280,10 @@ class CogneeMemoryTool(ContextProvider):
         embedding_api_key = os.getenv("EMBEDDING_API_KEY", "")
         embedding_model = os.getenv("EMBEDDING_MODEL", "")
 
-        # Vector DB Configuration
-        vector_db_url = os.getenv("VECTOR_DB_URL", "")
-        vector_db_provider = os.getenv("VECTOR_DB_PROVIDER", "qdrant")
+        # Vector DB Configuration — use Azure AI Search instead of Qdrant
+        azure_search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        azure_search_api_key = os.getenv("AZURE_SEARCH_API_KEY", "")
+        vector_db_provider = "azureaisearch"
 
         # Set cognee-specific environment variables
         os.environ["COGNEE_LLM_ENDPOINT"] = llm_endpoint
@@ -316,7 +295,8 @@ class CogneeMemoryTool(ContextProvider):
         os.environ["COGNEE_VECTOR_DB_API_KEY"] = embedding_api_key
         os.environ["COGNEE_VECTOR_DB_EMBEDDING_MODEL"] = embedding_model
         os.environ["COGNEE_VECTOR_DB_PROVIDER"] = vector_db_provider
-        os.environ["COGNEE_VECTOR_DB_URL"] = vector_db_url
+        os.environ["COGNEE_VECTOR_DB_URL"] = azure_search_endpoint
+        os.environ["COGNEE_VECTOR_DB_KEY"] = azure_search_api_key
 
         # Relational (SQLite) storage — ensure Cognee writes to a writable path
         db_path = os.getenv("DB_PATH", "/tmp/cognee_data/databases")
@@ -327,13 +307,13 @@ class CogneeMemoryTool(ContextProvider):
 
         print(
             f"Cognee configured: LLM={llm_model}, Embedding={embedding_model}, "
-            f"VectorDB={vector_db_provider} at {vector_db_url}, "
+            f"VectorDB={vector_db_provider} at {azure_search_endpoint}, "
             f"RelationalDB=sqlite at {db_path}/{db_name}, dataset={self.dataset_name}"
         )
 
     def _register_vector_adapter(self) -> None:
         try:
-            register.use_vector_adapter("qdrant", CustomQDrantAdapter)
-            logger.info("Registered CustomQDrantAdapter for Cognee")
+            use_vector_adapter("azureaisearch", CogneeAzureSearchAdapter)
+            logger.info("Registered CogneeAzureSearchAdapter for Cognee")
         except Exception as exc:
-            print(f"Cognee Qdrant adapter register failed: {exc}")
+            print(f"Cognee Azure Search adapter register failed: {exc}")

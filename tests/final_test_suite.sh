@@ -62,10 +62,10 @@ HEALTH=$(curl -s --max-time 10 "$BASE/")
 T1=$(date +%s%N)
 HEALTH_MS=$(( (T1 - T0) / 1000000 ))
 
-QDRANT_OK=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('Qdrant Healthy',False))" 2>/dev/null)
+QDRANT_OK=$(echo "$HEALTH" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Azure Search Healthy', d.get('Qdrant Healthy', False)))" 2>/dev/null)
 HINDSIGHT_OK=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('Hindsight Healthy',False))" 2>/dev/null)
 
-[[ "$QDRANT_OK" == "True" ]]     && ok "Qdrant healthy" || fail "Qdrant unhealthy"
+[[ "$QDRANT_OK" == "True" ]]     && ok "Vector DB healthy" || fail "Vector DB unhealthy"
 [[ "$HINDSIGHT_OK" == "True" ]]  && ok "Hindsight healthy" || fail "Hindsight unhealthy"
 printf "  📊 Health endpoint: ${B}%d ms${N}\n" "$HEALTH_MS"
 

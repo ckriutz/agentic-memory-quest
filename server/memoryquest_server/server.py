@@ -30,11 +30,6 @@ from memory import config as memory_config
 # --- Configuration & Initialization ---
 load_dotenv()
 
-# Fix for Qdrant connection issues with HTTPS
-if os.getenv("QDRANT_HOST", "").startswith("https://") and os.getenv("QDRANT_PORT") == "6333":
-    print("Adjusting QDRANT_PORT to 443 for HTTPS connection in server startup")
-    os.environ["QDRANT_PORT"] = "443"
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup/shutdown lifecycle."""
@@ -129,11 +124,17 @@ def _create_openai_input(username: str, messages: List[Message]) -> list[dict[st
 
 # --- Health Checks ---
 
-async def check_qdrant_health():
-    qdrant_host = os.getenv("QDRANT_HOST")
+async def check_azure_search_health():
+    endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+    api_key = os.getenv("AZURE_SEARCH_API_KEY", "")
+    if not endpoint:
+        return False
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{qdrant_host}")
+            response = await client.get(
+                f"{endpoint.rstrip('/')}/indexes?api-version=2024-07-01",
+                headers={"api-key": api_key},
+            )
             return response.status_code == 200
     except Exception:
         return False
@@ -150,11 +151,11 @@ async def check_hindsight_health():
 
 @app.get("/")
 async def read_root():
-    qdrant_healthy = await check_qdrant_health()
+    azure_search_healthy = await check_azure_search_health()
     hindsight_healthy = await check_hindsight_health()
     return {
         "Hello": "Agentic World", 
-        "Qdrant Healthy": qdrant_healthy, 
+        "Azure Search Healthy": azure_search_healthy, 
         "Hindsight Healthy": hindsight_healthy
     }
 

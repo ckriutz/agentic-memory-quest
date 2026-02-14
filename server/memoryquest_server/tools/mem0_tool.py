@@ -6,7 +6,6 @@ from agent_framework import ContextProvider, Context, ChatMessage
 from mem0 import AsyncMemory
 from collections.abc import MutableSequence, Sequence
 from typing import Any
-from qdrant_client import QdrantClient
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -37,16 +36,20 @@ class Mem0Tool(ContextProvider):
         self._memory: AsyncMemory | None = None
         self._memory_lock = asyncio.Lock()
         
-        # Initialize configuration immediately OR lazily.
-        # Encapsulating it ensures we pick up env vars at instantiation.
-        self._qdrant_client = QdrantClient(url=os.getenv("QDRANT_HOST"), port=443)
+        # Extract service name from the full endpoint URL
+        # e.g. "https://memquest-search.search.windows.net" → "memquest-search"
+        azure_search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        service_name = azure_search_endpoint.replace("https://", "").replace("http://", "").split(".")[0]
+        azure_search_api_key = os.getenv("AZURE_SEARCH_API_KEY", "")
         
         self._config = {
             "vector_store": {
-                "provider": "qdrant",
+                "provider": "azure_ai_search",
                 "config": {
-                    "client": self._qdrant_client,
-                    "collection_name": "mem0"
+                    "service_name": service_name,
+                    "collection_name": "mem0-vectors",
+                    "api_key": azure_search_api_key if azure_search_api_key else None,
+                    "embedding_model_dims": 1536,
                 },
             },
             "llm": {
