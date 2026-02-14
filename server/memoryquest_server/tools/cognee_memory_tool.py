@@ -91,20 +91,30 @@ class CogneeMemoryTool(ContextProvider):
         username = _extract_username(messages, **kwargs)
         dataset_name = self._dataset_name_for_user(username)
 
-        # Dynamic retrieval: Use the user's last message as the query
+        # Dynamic retrieval: Use the user's last message as the query.
+        # Meta-questions ("what do you remember about me") are poor search queries;
+        # fall back to a broad query that retrieves general user facts.
         query = "user preferences and history"
         if isinstance(messages, Sequence) and messages:
             for msg in reversed(messages):
                 role = getattr(msg.role, "value", None) or str(msg.role)
                 if role == "user":
-                    # Short messages like "Yes" or "Ok" produce poor vector search results;
-                    # fall back to the generic query in that case.
                     if len(msg.text) > 5:
-                        query = msg.text
+                        meta_phrases = [
+                            "remember about me", "know about me", "recall about me",
+                            "what do you remember", "what do you know", "list every fact",
+                        ]
+                        if not any(p in msg.text.lower() for p in meta_phrases):
+                            query = msg.text
                     break
         elif isinstance(messages, ChatMessage):
             if (getattr(messages.role, "value", None) or str(messages.role)) == "user" and len(messages.text) > 5:
-                query = messages.text
+                meta_phrases = [
+                    "remember about me", "know about me", "recall about me",
+                    "what do you remember", "what do you know", "list every fact",
+                ]
+                if not any(p in messages.text.lower() for p in meta_phrases):
+                    query = messages.text
 
         logger.info(f"Cognee invoking search for user '{username}' with query: '{query}'")
 
