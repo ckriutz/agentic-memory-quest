@@ -14,6 +14,10 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# Timeout for Cognee operations to prevent hanging when the LLM deployment
+# or vector DB is slow/unavailable.
+COGNEE_TIMEOUT_SECONDS = float(os.getenv("COGNEE_TIMEOUT_SECONDS", "15"))
+
 
 def _extract_username(messages, **kwargs):
     """Extract username from kwargs or from the system message 'You are assisting user X'."""
@@ -108,7 +112,10 @@ class CogneeMemoryTool(ContextProvider):
             if not await self._dataset_exists(dataset_name):
                 return Context(messages=[])
 
-            results = await cognee.search(query_text=query, datasets=dataset_name)
+            results = await asyncio.wait_for(
+                cognee.search(query_text=query, datasets=dataset_name),
+                timeout=COGNEE_TIMEOUT_SECONDS,
+            )
             memories = self._format_search_results(results)
 
             if not memories:
@@ -120,6 +127,9 @@ class CogneeMemoryTool(ContextProvider):
             )
         except asyncio.CancelledError:
             logger.warning("Cognee invoking() cancelled (server shutting down)")
+            return Context(messages=[])
+        except asyncio.TimeoutError:
+            logger.warning(f"Cognee search timed out after {COGNEE_TIMEOUT_SECONDS}s for user '{username}'")
             return Context(messages=[])
         except (DatasetNotFoundError, CogneeApiError) as exc:
             logger.info(f"Cognee search skipped (no prior data): {exc}")
@@ -213,11 +223,20 @@ class CogneeMemoryTool(ContextProvider):
         dataset_name = self._dataset_name_for_user(username)
         try:
             logger.debug(f"Background: Adding content for {dataset_name}")
-            await cognee.add(content, dataset_name=dataset_name)
+            await asyncio.wait_for(
+                cognee.add(content, dataset_name=dataset_name),
+                timeout=COGNEE_TIMEOUT_SECONDS,
+            )
 
             logger.debug(f"Background: Running cognify for {dataset_name}")
-            await cognee.cognify(datasets=dataset_name)
+            # cognify can be very slow (builds knowledge graph); give it more time
+            await asyncio.wait_for(
+                cognee.cognify(datasets=dataset_name),
+                timeout=COGNEE_TIMEOUT_SECONDS * 4,
+            )
             logger.info(f"Background: Cognee memory updated for user {username}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Background Cognee save timed out for {username}")
         except asyncio.CancelledError:
             logger.warning(f"Background save cancelled for {username}")
         except Exception as e:

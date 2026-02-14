@@ -1,4 +1,5 @@
 from typing import Any, MutableSequence, Sequence
+import asyncio
 import json
 import os
 import logging
@@ -7,6 +8,10 @@ from hindsight_client import Hindsight
 from hindsight_client_api import DocumentsApi
 
 logger = logging.getLogger(__name__)
+
+# Timeout for Hindsight service calls (recall/retain) to prevent hanging
+# when the service is unhealthy or unreachable.
+HINDSIGHT_TIMEOUT_SECONDS = float(os.getenv("HINDSIGHT_TIMEOUT_SECONDS", "10"))
 
 
 def _extract_username(messages, **kwargs):
@@ -111,8 +116,13 @@ class HindsightMemoryTool(ContextProvider):
 
         try:
             content = json.dumps(messages, ensure_ascii=False)
-            response = await self.client.aretain(bank_id=username, content=content)
+            response = await asyncio.wait_for(
+                self.client.aretain(bank_id=username, content=content),
+                timeout=HINDSIGHT_TIMEOUT_SECONDS,
+            )
             print("HindsightMemoryTool retain response:", response)
+        except asyncio.TimeoutError:
+            logger.warning(f"Hindsight aretain timed out after {HINDSIGHT_TIMEOUT_SECONDS}s for user {username}")
         except Exception as e:
             logger.error(f"Failed to save context to Hindsight: {e}")
 
@@ -137,9 +147,12 @@ class HindsightMemoryTool(ContextProvider):
                 query = messages.text
 
         try:
-            results = await self.client.arecall(
-                bank_id=username,
-                query=query,
+            results = await asyncio.wait_for(
+                self.client.arecall(
+                    bank_id=username,
+                    query=query,
+                ),
+                timeout=HINDSIGHT_TIMEOUT_SECONDS,
             )
             print(f"HindsightMemoryTool recall results for '{query}':", results)
 
@@ -151,6 +164,9 @@ class HindsightMemoryTool(ContextProvider):
                     )
                 ]
             )
+        except asyncio.TimeoutError:
+            logger.warning(f"Hindsight arecall timed out after {HINDSIGHT_TIMEOUT_SECONDS}s for user {username}")
+            return Context(messages=[])
         except Exception as e:
             logger.error(f"Failed to recall memories: {e}")
             # Return empty context so the agent can still proceed without memory

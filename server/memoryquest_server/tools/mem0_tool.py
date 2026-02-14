@@ -11,6 +11,9 @@ from qdrant_client import QdrantClient
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# Timeout for Mem0/Qdrant operations to prevent hanging.
+MEM0_TIMEOUT_SECONDS = float(os.getenv("MEM0_TIMEOUT_SECONDS", "10"))
+
 
 def _extract_username(messages, **kwargs):
     """Extract username from kwargs or from the system message 'You are assisting user X'."""
@@ -161,7 +164,12 @@ class Mem0Tool(ContextProvider):
         try:
             memory = await self._ensure_memory()
             print(f"Mem0Agent storing memories for: {username} (background)")
-            await memory.add(user_id=username, messages=messages)
+            await asyncio.wait_for(
+                memory.add(user_id=username, messages=messages),
+                timeout=MEM0_TIMEOUT_SECONDS * 3,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Mem0 background add timed out for user {username}")
         except Exception as exc:
             logger.error(f"Mem0 background add failed: {exc}")
 
@@ -187,7 +195,10 @@ class Mem0Tool(ContextProvider):
         print(f"Mem0Agent search query: {search_query}")
         
         try:
-            results = await memory.search(user_id=username, query=search_query, limit=5)
+            results = await asyncio.wait_for(
+                memory.search(user_id=username, query=search_query, limit=5),
+                timeout=MEM0_TIMEOUT_SECONDS,
+            )
             memories = results.get("results", []) if isinstance(results, dict) else []
             
             lines: list[str] = []
@@ -203,6 +214,9 @@ class Mem0Tool(ContextProvider):
             context_text = "Stored memories relevant to current REQUEST:\n" + "\n".join(lines)
             return Context(messages=[ChatMessage(role="system", text=context_text)])
             
+        except asyncio.TimeoutError:
+            logger.warning(f"Mem0 search timed out after {MEM0_TIMEOUT_SECONDS}s for user {username}")
+            return Context(messages=[])
         except Exception as e:
             logger.error(f"Error during memory search invoking: {e}")
             return Context(messages=[])

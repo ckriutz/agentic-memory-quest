@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import warnings
 import httpx
 from contextlib import asynccontextmanager
@@ -250,7 +251,10 @@ async def _memory_retrieve(username: str, agent_id: str, query_text: str, tenant
             tenant_id=tenant_id,
             agent_id=agent_id,
         )
-        hits = await memory_adapter.retrieve(ctx, k=memory_config.MEMORY_K)
+        hits = await asyncio.wait_for(
+            memory_adapter.retrieve(ctx, k=memory_config.MEMORY_K),
+            timeout=10.0,
+        )
         if not hits:
             return ""
         snippets = [f"- {h.text_snippet}" for h in hits if h.text_snippet]
