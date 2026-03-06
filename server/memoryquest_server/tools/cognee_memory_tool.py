@@ -3,16 +3,20 @@ import asyncio
 import logging
 import cognee
 from typing import Any, MutableSequence, Sequence
-from cognee_community_vector_adapter_qdrant import register
-from cognee_community_vector_adapter_qdrant.qdrant_adapter import QDrantAdapter
-from qdrant_client import AsyncQdrantClient
+from cognee.infrastructure.databases.vector import use_vector_adapter
 from cognee.modules.data.exceptions.exceptions import DatasetNotFoundError
 from cognee.exceptions import CogneeApiError
 from agent_framework import ChatMessage, Context, ContextProvider
 from dotenv import load_dotenv
 
+from tools.cognee_azure_search_adapter import CogneeAzureSearchAdapter
+
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+# Timeout for Cognee operations to prevent hanging when the LLM deployment
+# or vector DB is slow/unavailable.
+COGNEE_TIMEOUT_SECONDS = float(os.getenv("COGNEE_TIMEOUT_SECONDS", "15"))
 
 
 def _extract_username(messages, **kwargs):
@@ -29,28 +33,6 @@ def _extract_username(messages, **kwargs):
             if match:
                 return match.group(1)
     return "anonymous"
-
-
-class CustomQDrantAdapter(QDrantAdapter):
-    """Custom QDrant adapter that properly handles HTTPS URLs.
-    
-    The default QDrantAdapter passes port=6333 even for HTTPS URLs, which causes
-    connection issues. For HTTPS URLs, we must explicitly set port=443.
-    """
-    
-    def get_qdrant_client(self) -> AsyncQdrantClient:
-        if hasattr(self, 'qdrant_path') and self.qdrant_path is not None:
-            return AsyncQdrantClient(path=self.qdrant_path)
-        elif self.url is not None:
-            url = self.url
-            if url.startswith("https://"):
-                import re
-                url = re.sub(r':\d+/?$', '', url)
-                url = url.rstrip('/')
-                return AsyncQdrantClient(url=url, api_key=self.api_key, port=443)
-            else:
-                return AsyncQdrantClient(url=url, api_key=self.api_key, port=6333)
-        return AsyncQdrantClient(location=":memory:")
 
 
 class CogneeMemoryTool(ContextProvider):
@@ -87,20 +69,30 @@ class CogneeMemoryTool(ContextProvider):
         username = _extract_username(messages, **kwargs)
         dataset_name = self._dataset_name_for_user(username)
 
-        # Dynamic retrieval: Use the user's last message as the query
+        # Dynamic retrieval: Use the user's last message as the query.
+        # Meta-questions ("what do you remember about me") are poor search queries;
+        # fall back to a broad query that retrieves general user facts.
         query = "user preferences and history"
         if isinstance(messages, Sequence) and messages:
             for msg in reversed(messages):
                 role = getattr(msg.role, "value", None) or str(msg.role)
                 if role == "user":
-                    # Short messages like "Yes" or "Ok" produce poor vector search results;
-                    # fall back to the generic query in that case.
                     if len(msg.text) > 5:
-                        query = msg.text
+                        meta_phrases = [
+                            "remember about me", "know about me", "recall about me",
+                            "what do you remember", "what do you know", "list every fact",
+                        ]
+                        if not any(p in msg.text.lower() for p in meta_phrases):
+                            query = msg.text
                     break
         elif isinstance(messages, ChatMessage):
             if (getattr(messages.role, "value", None) or str(messages.role)) == "user" and len(messages.text) > 5:
-                query = messages.text
+                meta_phrases = [
+                    "remember about me", "know about me", "recall about me",
+                    "what do you remember", "what do you know", "list every fact",
+                ]
+                if not any(p in messages.text.lower() for p in meta_phrases):
+                    query = messages.text
 
         logger.info(f"Cognee invoking search for user '{username}' with query: '{query}'")
 
@@ -108,7 +100,10 @@ class CogneeMemoryTool(ContextProvider):
             if not await self._dataset_exists(dataset_name):
                 return Context(messages=[])
 
-            results = await cognee.search(query_text=query, datasets=dataset_name)
+            results = await asyncio.wait_for(
+                cognee.search(query_text=query, datasets=dataset_name),
+                timeout=COGNEE_TIMEOUT_SECONDS,
+            )
             memories = self._format_search_results(results)
 
             if not memories:
@@ -120,6 +115,9 @@ class CogneeMemoryTool(ContextProvider):
             )
         except asyncio.CancelledError:
             logger.warning("Cognee invoking() cancelled (server shutting down)")
+            return Context(messages=[])
+        except asyncio.TimeoutError:
+            logger.warning(f"Cognee search timed out after {COGNEE_TIMEOUT_SECONDS}s for user '{username}'")
             return Context(messages=[])
         except (DatasetNotFoundError, CogneeApiError) as exc:
             logger.info(f"Cognee search skipped (no prior data): {exc}")
@@ -213,11 +211,20 @@ class CogneeMemoryTool(ContextProvider):
         dataset_name = self._dataset_name_for_user(username)
         try:
             logger.debug(f"Background: Adding content for {dataset_name}")
-            await cognee.add(content, dataset_name=dataset_name)
+            await asyncio.wait_for(
+                cognee.add(content, dataset_name=dataset_name),
+                timeout=COGNEE_TIMEOUT_SECONDS,
+            )
 
             logger.debug(f"Background: Running cognify for {dataset_name}")
-            await cognee.cognify(datasets=dataset_name)
+            # cognify can be very slow (builds knowledge graph); give it more time
+            await asyncio.wait_for(
+                cognee.cognify(datasets=dataset_name),
+                timeout=COGNEE_TIMEOUT_SECONDS * 4,
+            )
             logger.info(f"Background: Cognee memory updated for user {username}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Background Cognee save timed out for {username}")
         except asyncio.CancelledError:
             logger.warning(f"Background save cancelled for {username}")
         except Exception as e:
@@ -273,9 +280,10 @@ class CogneeMemoryTool(ContextProvider):
         embedding_api_key = os.getenv("EMBEDDING_API_KEY", "")
         embedding_model = os.getenv("EMBEDDING_MODEL", "")
 
-        # Vector DB Configuration
-        vector_db_url = os.getenv("VECTOR_DB_URL", "")
-        vector_db_provider = os.getenv("VECTOR_DB_PROVIDER", "qdrant")
+        # Vector DB Configuration — use Azure AI Search instead of Qdrant
+        azure_search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        azure_search_api_key = os.getenv("AZURE_SEARCH_API_KEY", "")
+        vector_db_provider = "azureaisearch"
 
         # Set cognee-specific environment variables
         os.environ["COGNEE_LLM_ENDPOINT"] = llm_endpoint
@@ -287,7 +295,8 @@ class CogneeMemoryTool(ContextProvider):
         os.environ["COGNEE_VECTOR_DB_API_KEY"] = embedding_api_key
         os.environ["COGNEE_VECTOR_DB_EMBEDDING_MODEL"] = embedding_model
         os.environ["COGNEE_VECTOR_DB_PROVIDER"] = vector_db_provider
-        os.environ["COGNEE_VECTOR_DB_URL"] = vector_db_url
+        os.environ["COGNEE_VECTOR_DB_URL"] = azure_search_endpoint
+        os.environ["COGNEE_VECTOR_DB_KEY"] = azure_search_api_key
 
         # Relational (SQLite) storage — ensure Cognee writes to a writable path
         db_path = os.getenv("DB_PATH", "/tmp/cognee_data/databases")
@@ -298,13 +307,13 @@ class CogneeMemoryTool(ContextProvider):
 
         print(
             f"Cognee configured: LLM={llm_model}, Embedding={embedding_model}, "
-            f"VectorDB={vector_db_provider} at {vector_db_url}, "
+            f"VectorDB={vector_db_provider} at {azure_search_endpoint}, "
             f"RelationalDB=sqlite at {db_path}/{db_name}, dataset={self.dataset_name}"
         )
 
     def _register_vector_adapter(self) -> None:
         try:
-            register.use_vector_adapter("qdrant", CustomQDrantAdapter)
-            logger.info("Registered CustomQDrantAdapter for Cognee")
+            use_vector_adapter("azureaisearch", CogneeAzureSearchAdapter)
+            logger.info("Registered CogneeAzureSearchAdapter for Cognee")
         except Exception as exc:
-            print(f"Cognee Qdrant adapter register failed: {exc}")
+            print(f"Cognee Azure Search adapter register failed: {exc}")

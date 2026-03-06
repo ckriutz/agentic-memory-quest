@@ -1,11 +1,13 @@
-agent-framework==1.0.0b251120 --pre
-agent-framework-azure-ai==1.0.0b251120 --pre
+# Pin to 260130 which likely has the old API
+agent-framework-core==1.0.0b260130 --pre
+agent-framework-azure-ai --pre
 fastapi[standard]
-agent-framework-mem0==1.0.0b251120 --pre
+agent-framework-mem0 --pre
 mem0ai
 python-dotenv
 cognee
-cognee-community-vector-adapter-qdrant
 hindsight-client
 azure-identity
 azure-ai-projects>=2.0.0b1
+azure-search-documents
+azure-eventhub

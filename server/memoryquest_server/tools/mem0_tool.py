@@ -6,10 +6,12 @@ from agent_framework import ContextProvider, Context, ChatMessage
 from mem0 import AsyncMemory
 from collections.abc import MutableSequence, Sequence
 from typing import Any
-from qdrant_client import QdrantClient
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+# Timeout for Mem0/Qdrant operations to prevent hanging.
+MEM0_TIMEOUT_SECONDS = float(os.getenv("MEM0_TIMEOUT_SECONDS", "10"))
 
 
 def _extract_username(messages, **kwargs):
@@ -34,16 +36,20 @@ class Mem0Tool(ContextProvider):
         self._memory: AsyncMemory | None = None
         self._memory_lock = asyncio.Lock()
         
-        # Initialize configuration immediately OR lazily.
-        # Encapsulating it ensures we pick up env vars at instantiation.
-        self._qdrant_client = QdrantClient(url=os.getenv("QDRANT_HOST"), port=443)
+        # Extract service name from the full endpoint URL
+        # e.g. "https://memquest-search.search.windows.net" → "memquest-search"
+        azure_search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        service_name = azure_search_endpoint.replace("https://", "").replace("http://", "").split(".")[0]
+        azure_search_api_key = os.getenv("AZURE_SEARCH_API_KEY", "")
         
         self._config = {
             "vector_store": {
-                "provider": "qdrant",
+                "provider": "azure_ai_search",
                 "config": {
-                    "client": self._qdrant_client,
-                    "collection_name": "mem0"
+                    "service_name": service_name,
+                    "collection_name": "mem0-vectors",
+                    "api_key": azure_search_api_key if azure_search_api_key else None,
+                    "embedding_model_dims": 1536,
                 },
             },
             "llm": {
@@ -161,7 +167,12 @@ class Mem0Tool(ContextProvider):
         try:
             memory = await self._ensure_memory()
             print(f"Mem0Agent storing memories for: {username} (background)")
-            await memory.add(user_id=username, messages=messages)
+            await asyncio.wait_for(
+                memory.add(user_id=username, messages=messages),
+                timeout=MEM0_TIMEOUT_SECONDS * 3,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Mem0 background add timed out for user {username}")
         except Exception as exc:
             logger.error(f"Mem0 background add failed: {exc}")
 
@@ -187,7 +198,10 @@ class Mem0Tool(ContextProvider):
         print(f"Mem0Agent search query: {search_query}")
         
         try:
-            results = await memory.search(user_id=username, query=search_query, limit=5)
+            results = await asyncio.wait_for(
+                memory.search(user_id=username, query=search_query, limit=5),
+                timeout=MEM0_TIMEOUT_SECONDS,
+            )
             memories = results.get("results", []) if isinstance(results, dict) else []
             
             lines: list[str] = []
@@ -203,6 +217,9 @@ class Mem0Tool(ContextProvider):
             context_text = "Stored memories relevant to current REQUEST:\n" + "\n".join(lines)
             return Context(messages=[ChatMessage(role="system", text=context_text)])
             
+        except asyncio.TimeoutError:
+            logger.warning(f"Mem0 search timed out after {MEM0_TIMEOUT_SECONDS}s for user {username}")
+            return Context(messages=[])
         except Exception as e:
             logger.error(f"Error during memory search invoking: {e}")
             return Context(messages=[])

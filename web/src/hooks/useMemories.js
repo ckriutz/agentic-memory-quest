@@ -1,12 +1,17 @@
 import { useCallback, useState } from 'react'
 
-export function useMemories({ username, getEndpoint }) {
+export function useMemories({ username, getEndpoint, memoryFramework }) {
   const [memories, setMemories] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
 
   const fetchMemories = useCallback(
     async (messages) => {
       if (!username) return
+      // Skip fetching for the generic (no-memory) agent
+      if (memoryFramework === 'none') {
+        setMemories({ message: 'No memory — the generic agent does not use memory. Select a memory framework to see memories.' })
+        return
+      }
 
       setIsLoading(true)
       try {
@@ -34,7 +39,7 @@ export function useMemories({ username, getEndpoint }) {
         setIsLoading(false)
       }
     },
-    [username, getEndpoint]
+    [username, getEndpoint, memoryFramework]
   )
 
   return {
